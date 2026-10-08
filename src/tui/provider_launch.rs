@@ -12,7 +12,10 @@ use ratatui::{
 
 use super::hitmap::{HitMap, OverlayClick, OverlayHit};
 use super::popup::{self, PopupState};
-use super::provider_form::{REASONING_CHOICES, reasoning_choice};
+use super::provider_form::{
+    ReasoningCatalog, reasoning_catalog_from_model_levels, reasoning_catalog_from_report_entry,
+    reasoning_choice_with, reasoning_choices,
+};
 use super::theme::{C_RED, base, dim, header, key};
 use crate::provider::{ProviderProfile, ReasoningLaunch};
 use crate::warmup::ModelEntry;
@@ -29,6 +32,7 @@ struct LaunchModel {
     id: String,
     title: String,
     saved_reasoning: Option<String>,
+    reasoning_choices: Vec<String>,
     no_web_search: bool,
     is_default: bool,
     capability_note: Option<String>,
@@ -67,16 +71,21 @@ impl ProviderLaunchState {
         let models: Vec<LaunchModel> = profile
             .models
             .iter()
-            .map(|model| LaunchModel {
-                id: model.id.clone(),
-                title: model.id.clone(),
-                saved_reasoning: model.reasoning.clone(),
-                no_web_search: model.no_web_search,
-                is_default: model.id.trim() == profile.default_model.trim(),
-                capability_note: catalog["models"]
+            .map(|model| {
+                let report_entry = catalog["models"]
                     .as_array()
-                    .and_then(|models| models.iter().find(|entry| entry["id"] == model.id))
-                    .map(|entry| {
+                    .and_then(|models| models.iter().find(|entry| entry["id"] == model.id));
+                let reasoning_catalog = report_entry
+                    .map(reasoning_catalog_from_report_entry)
+                    .unwrap_or(ReasoningCatalog::Unknown);
+                LaunchModel {
+                    id: model.id.clone(),
+                    title: model.id.clone(),
+                    saved_reasoning: model.reasoning.clone(),
+                    reasoning_choices: reasoning_choices(&reasoning_catalog),
+                    no_web_search: model.no_web_search,
+                    is_default: model.id.trim() == profile.default_model.trim(),
+                    capability_note: report_entry.map(|entry| {
                         let cap = &entry["capabilities"];
                         format!(
                             "{} | agents {} | Lite {} | patch {} | {}",
@@ -99,6 +108,7 @@ impl ProviderLaunchState {
                                 .unwrap_or_default()
                         )
                     }),
+                }
             })
             .collect();
         let selected = models
@@ -107,7 +117,9 @@ impl ProviderLaunchState {
             .unwrap_or(0);
         let (reasoning_idx, custom_reasoning) = models
             .get(selected)
-            .map(|model| reasoning_choice(model.saved_reasoning.as_deref()))
+            .map(|model| {
+                reasoning_choice_with(model.saved_reasoning.as_deref(), &model.reasoning_choices)
+            })
             .unwrap_or((0, None));
         Self {
             popup: PopupState::new(),
@@ -141,6 +153,7 @@ impl ProviderLaunchState {
             id: String::new(),
             title: "(Codex default)".into(),
             saved_reasoning: None,
+            reasoning_choices: reasoning_choices(&ReasoningCatalog::Unknown),
             no_web_search: false,
             is_default: true,
             capability_note: None,
@@ -157,6 +170,9 @@ impl ProviderLaunchState {
                 id: model.slug.clone(),
                 title,
                 saved_reasoning: model.default_reasoning_effort.clone(),
+                reasoning_choices: reasoning_choices(&reasoning_catalog_from_model_levels(
+                    &model.supported_reasoning_efforts,
+                )),
                 no_web_search: false,
                 is_default: false,
                 capability_note: None,
@@ -190,14 +206,13 @@ impl ProviderLaunchState {
         }
         if let Some(models) = models {
             let selected_id = self.models.get(self.selected).map(|model| model.id.clone());
-            let previous_reasoning = (self.reasoning_idx, self.custom_reasoning.clone());
+            let previous_reasoning = self.selected_reasoning_value();
             let mut replacement = Self::from_chatgpt(alias, models);
             if let Some(index) = selected_id
                 .and_then(|id| replacement.models.iter().position(|model| model.id == id))
             {
                 replacement.selected = index;
-                replacement.reasoning_idx = previous_reasoning.0;
-                replacement.custom_reasoning = previous_reasoning.1;
+                replacement.set_reasoning_value(previous_reasoning.as_deref());
             }
             replacement.extra_args = std::mem::take(&mut self.extra_args);
             replacement.extra_error = self.extra_error.take();
@@ -269,10 +284,32 @@ impl ProviderLaunchState {
             return;
         }
         self.selected = idx;
-        let (reasoning_idx, custom_reasoning) =
-            reasoning_choice(self.models[idx].saved_reasoning.as_deref());
+        let saved_reasoning = self.models[idx].saved_reasoning.clone();
+        self.set_reasoning_value(saved_reasoning.as_deref());
+    }
+
+    fn set_reasoning_value(&mut self, value: Option<&str>) {
+        let choices = self
+            .models
+            .get(self.selected)
+            .map(|model| model.reasoning_choices.clone())
+            .unwrap_or_default();
+        let (reasoning_idx, custom_reasoning) = reasoning_choice_with(value, &choices);
         self.reasoning_idx = reasoning_idx;
         self.custom_reasoning = custom_reasoning;
+    }
+
+    fn selected_reasoning_value(&self) -> Option<String> {
+        if let Some(custom) = &self.custom_reasoning {
+            return Some(custom.clone());
+        }
+        if self.reasoning_idx == 0 {
+            return None;
+        }
+        self.models
+            .get(self.selected)
+            .and_then(|model| model.reasoning_choices.get(self.reasoning_idx))
+            .cloned()
     }
 
     fn reasoning_for_launch(&self) -> ReasoningLaunch {
@@ -282,7 +319,12 @@ impl ProviderLaunchState {
         if self.reasoning_idx == 0 {
             ReasoningLaunch::Skip
         } else {
-            ReasoningLaunch::Effort(REASONING_CHOICES[self.reasoning_idx].to_string())
+            self.models
+                .get(self.selected)
+                .and_then(|model| model.reasoning_choices.get(self.reasoning_idx))
+                .cloned()
+                .map(ReasoningLaunch::Effort)
+                .unwrap_or(ReasoningLaunch::Skip)
         }
     }
 
@@ -314,9 +356,14 @@ impl ProviderLaunchState {
     }
 
     fn reasoning_label(&self) -> &str {
-        self.custom_reasoning
-            .as_deref()
-            .unwrap_or(REASONING_CHOICES[self.reasoning_idx])
+        if let Some(custom) = self.custom_reasoning.as_deref() {
+            return custom;
+        }
+        self.models
+            .get(self.selected)
+            .and_then(|model| model.reasoning_choices.get(self.reasoning_idx))
+            .map(String::as_str)
+            .unwrap_or("(skip)")
     }
 
     pub fn handle_key(&mut self, code: KeyCode) -> LaunchPickerOutcome {
@@ -360,18 +407,28 @@ impl ProviderLaunchState {
             if delta > 0 {
                 self.reasoning_idx = 0;
             } else {
-                self.reasoning_idx = REASONING_CHOICES.len() - 1;
+                self.reasoning_idx = self
+                    .models
+                    .get(self.selected)
+                    .map(|model| model.reasoning_choices.len().saturating_sub(1))
+                    .unwrap_or(0);
             }
             return;
         }
+        let choices_len = self
+            .models
+            .get(self.selected)
+            .map(|model| model.reasoning_choices.len())
+            .unwrap_or(1)
+            .max(1);
         if delta < 0 {
             if self.reasoning_idx > 0 {
                 self.reasoning_idx -= 1;
             } else {
-                self.reasoning_idx = REASONING_CHOICES.len() - 1;
+                self.reasoning_idx = choices_len - 1;
             }
         } else {
-            self.reasoning_idx = (self.reasoning_idx + 1) % REASONING_CHOICES.len();
+            self.reasoning_idx = (self.reasoning_idx + 1) % choices_len;
         }
     }
 
@@ -620,6 +677,54 @@ mod tests {
         p
     }
 
+    fn profile_with_catalog(levels: &[&str]) -> (tempfile::TempDir, ProviderProfile) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models.json");
+        let supported_reasoning_levels = levels
+            .iter()
+            .map(|effort| serde_json::json!({"effort": effort, "description": effort}))
+            .collect::<Vec<_>>();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "models": [{
+                    "slug": "m",
+                    "supported_reasoning_levels": supported_reasoning_levels
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut profile = ProviderProfile::build(
+            "saved-catalog",
+            "https://example.invalid/v1",
+            vec![ProviderModel::from_id("m")],
+            "sk",
+        );
+        let encoded_path = serde_json::to_string(&path.to_string_lossy().to_string()).unwrap();
+        profile.codex_config = vec![format!("model_catalog_json={encoded_path}")];
+        (dir, profile)
+    }
+
+    fn profile_without_reasoning_metadata() -> (tempfile::TempDir, ProviderProfile) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({"models": [{"slug": "m"}]})).unwrap(),
+        )
+        .unwrap();
+        let mut profile = ProviderProfile::build(
+            "unknown-catalog",
+            "https://example.invalid/v1",
+            vec![ProviderModel::from_id("m")],
+            "sk",
+        );
+        let encoded_path = serde_json::to_string(&path.to_string_lossy().to_string()).unwrap();
+        profile.codex_config = vec![format!("model_catalog_json={encoded_path}")];
+        (dir, profile)
+    }
+
     #[test]
     fn picker_starts_on_default_and_can_select_another_model_with_reasoning() {
         let mut picker = ProviderLaunchState::from_profile(&profile());
@@ -645,6 +750,37 @@ mod tests {
         // saved high (index of "high") then one Right → xhigh
         assert_eq!(reasoning, ReasoningLaunch::Effort("xhigh".into()));
         assert!(extra_args.is_empty());
+    }
+
+    #[test]
+    fn provider_picker_follows_advertised_levels_and_includes_ultra() {
+        let (_dir, profile) = profile_with_catalog(&["low", "high", "ultra"]);
+        let mut picker = ProviderLaunchState::from_profile(&profile);
+
+        for expected in ["low", "high", "ultra"] {
+            picker.handle_key(KeyCode::Right);
+            assert_eq!(picker.reasoning_label(), expected);
+        }
+        picker.handle_key(KeyCode::Right);
+        assert_eq!(picker.reasoning_label(), "(skip)");
+    }
+
+    #[test]
+    fn provider_picker_respects_an_explicit_empty_reasoning_catalog() {
+        let (_dir, profile) = profile_with_catalog(&[]);
+        let mut picker = ProviderLaunchState::from_profile(&profile);
+        picker.handle_key(KeyCode::Right);
+        assert_eq!(picker.reasoning_label(), "(skip)");
+    }
+
+    #[test]
+    fn provider_picker_falls_back_to_generic_levels_with_ultra() {
+        let (_dir, profile) = profile_without_reasoning_metadata();
+        let mut picker = ProviderLaunchState::from_profile(&profile);
+        for _ in 0..7 {
+            picker.handle_key(KeyCode::Right);
+        }
+        assert_eq!(picker.reasoning_label(), "ultra");
     }
 
     #[test]
@@ -680,6 +816,34 @@ mod tests {
         assert_eq!(picker.extra_error.as_deref(), Some("keep editing"));
         assert_eq!(picker.popup.scroll, 3);
         assert!(picker.models.iter().any(|model| model.id == "gpt-6.1-sol"));
+    }
+
+    #[test]
+    fn account_catalog_refresh_preserves_reasoning_value_when_levels_reorder() {
+        let initial = [ModelEntry {
+            slug: "gpt-5.4".into(),
+            default_reasoning_effort: Some("high".into()),
+            supported_reasoning_efforts: vec!["low".into(), "high".into()],
+            ..ModelEntry::default()
+        }];
+        let mut picker = ProviderLaunchState::from_chatgpt("work", &initial);
+        picker.handle_key(KeyCode::Down);
+        picker.handle_key(KeyCode::Left);
+        assert_eq!(picker.reasoning_label(), "low");
+
+        let updated = [ModelEntry {
+            slug: "gpt-5.4".into(),
+            default_reasoning_effort: Some("high".into()),
+            supported_reasoning_efforts: vec!["high".into(), "low".into()],
+            ..ModelEntry::default()
+        }];
+        picker.update_chatgpt_catalog("work", Some(&updated), None);
+
+        let LaunchPickerOutcome::Launch { reasoning, .. } = picker.handle_key(KeyCode::Enter)
+        else {
+            panic!("enter should launch");
+        };
+        assert_eq!(reasoning, ReasoningLaunch::Effort("low".into()));
     }
 
     #[test]
@@ -847,6 +1011,24 @@ mod tests {
         assert_eq!(alias, "work");
         assert_eq!(model, "gpt-5.4");
         assert_eq!(reasoning, ReasoningLaunch::Effort("high".into()));
+    }
+
+    #[test]
+    fn chatgpt_picker_follows_advertised_levels_and_includes_ultra() {
+        let models = [ModelEntry {
+            slug: "gpt-5.4".into(),
+            supported_reasoning_efforts: vec!["low".into(), "high".into(), "ultra".into()],
+            ..ModelEntry::default()
+        }];
+        let mut picker = ProviderLaunchState::from_chatgpt("work", &models);
+        picker.handle_key(KeyCode::Down);
+
+        for expected in ["low", "high", "ultra"] {
+            picker.handle_key(KeyCode::Right);
+            assert_eq!(picker.reasoning_label(), expected);
+        }
+        picker.handle_key(KeyCode::Right);
+        assert_eq!(picker.reasoning_label(), "(skip)");
     }
 
     #[test]

@@ -57,6 +57,7 @@ fn status_name(status: crate::codex_compat::CompatibilityStatus) -> &'static str
         Status::Unknown => "unknown",
         Status::DevBuild => "dev_build",
         Status::BelowMinimum => "below_minimum",
+        Status::SupportedOlder => "supported_older",
         Status::Aligned => "aligned",
         Status::AboveBaselineUnverified => "above_baseline_unverified",
     }

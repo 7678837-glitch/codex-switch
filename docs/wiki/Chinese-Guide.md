@@ -83,7 +83,7 @@ codex-switch doctor
 codex-switch doctor --desktop-codex <桌面版内置引擎路径>
 ```
 
-未提供桌面路径会报告 `not_checked`，不会失败。未知/低于最低版本会失败并输出诊断；两个引擎都达到最低版本但 core/prerelease 版本不同时，只报告差异，build metadata 差异不算版本不匹配。更高版本会标为 `above_baseline_unverified`。本地自行构建的 Codex（版本为 `0.0.0` 或带 `-dev` / `-local` 后缀）标为 `dev_build`：不与最低版本比较、不显示升级警告、不阻止 `launch`，HTTP 请求的 `client_version` 使用 0.159.2 基线而不是该版本。`doctor` 只检查可执行文件版本，不检查认证、系统/managed policy、桌面 UI 或 daemon 兼容性；版本差异不代表这些路径已验证。`--json doctor` 提供结构化结果；详见英文 [Command reference](Command-Reference)。
+最低支持版本为 `0.159.2`，当前对齐基线为 `0.161.0`。未提供桌面路径会报告 `not_checked`，不会失败。未知或低于最低版本会失败并输出诊断；达到最低要求但低于对齐基线的版本标为 `supported_older`，仍可使用。两个引擎都达到最低版本但 core/prerelease 版本不同时，只报告差异，build metadata 差异不算版本不匹配。超过对齐基线的版本标为 `above_baseline_unverified`。本地自行构建的 Codex（版本为 `0.0.0` 或带 `-dev` / `-local` 后缀）标为 `dev_build`：不与最低版本比较、不显示升级警告、不阻止 `launch`，HTTP 请求的 `client_version` 使用 `0.161.0` 基线。`doctor` 只检查可执行文件版本，不检查认证、系统/managed policy、桌面 UI 或 daemon 兼容性；版本差异不代表这些路径已验证。`--json doctor` 提供结构化结果；详见英文 [Command reference](Command-Reference)。
 
 一个提供方 = **一个 Responses-compatible 端点 URL + 一把 API 密钥 + 多个模型**。可获取网关模型目录并启动 Codex。兼容性取决于网关和具体模型；提供方没有 ChatGPT 额度视图，也不参与自动选号。别名（Alias）是唯一对用户可见的名称；思考等级（reasoning）与 `web_search` 按**模型**保存，不是按整个提供方。
 
@@ -237,7 +237,7 @@ Codex 在前台运行；退出后回到 TUI。
 
 ### 提供方的原生 Codex 环境
 
-提供方启动按 Codex 0.159.2 的模型契约验证（见仓库 `docs/CODEX-ALIGNMENT.md`）。每次启动在 `$CODEX_HOME` 创建 `cs-*.config.toml`，只保存本次提供方的差异配置；密钥仅通过子进程环境变量传入。公共资源与周边服务认证继续由 Codex 原生机制管理。Codex 内保存的设置属于当前 profile，恢复该会话时继续使用；公共配置的后续更新仍会被继承，除非该 profile 已覆盖相同设置。不要另行传入 `--profile` / `-p`。
+提供方启动按 Codex `0.161.0` 的模型契约验证，最低支持版本仍为 `0.159.2`（见仓库 `docs/CODEX-ALIGNMENT.md`）。每次启动在 `$CODEX_HOME` 创建 `cs-*.config.toml`，只保存本次提供方的差异配置；密钥仅通过子进程环境变量传入。公共资源与周边服务认证继续由 Codex 原生机制管理。Codex 内保存的设置属于当前 profile，恢复该会话时继续使用；公共配置的后续更新仍会被继承，除非该 profile 已覆盖相同设置。不要另行传入 `--profile` / `-p`。
 
 运行元数据与模型目录保存在 `$CODEX_SWITCH_HOME/provider-runs/`，会话保存在默认 Codex home。提供方重命名不会改变历史归属，删除后同名重建不会接管旧会话。已有旧版隔离目录的历史仍按旧路径恢复，尚未迁移为共享资源环境。
 

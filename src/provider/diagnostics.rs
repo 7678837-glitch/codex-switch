@@ -47,6 +47,36 @@ pub(crate) fn catalog_report(profile: &ProviderProfile) -> Value {
     let mut issues = Vec::new();
     let explicit =
         override_value(&profile.codex_config, "model_catalog_json").map(provider_override_value);
+    let catalog_policy = if explicit.is_some() {
+        issue(
+            &mut issues,
+            "catalog_snapshot_policy",
+            false,
+            "launch uses the local model_catalog_json snapshot; it does not refresh automatically. The explicit catalog file is user-managed.",
+        );
+        json!({
+            "storage": "local_snapshot",
+            "automatic_refresh": false,
+            "refresh_command": Value::Null,
+            "management": "user_explicit",
+        })
+    } else {
+        issue(
+            &mut issues,
+            "catalog_snapshot_policy",
+            false,
+            format!(
+                "launch uses a local snapshot and does not refresh automatically; run `codex-switch provider fetch-models {}` to refresh the managed catalog.",
+                profile.alias
+            ),
+        );
+        json!({
+            "storage": "local_snapshot",
+            "automatic_refresh": false,
+            "refresh_command": format!("codex-switch provider fetch-models {}", profile.alias),
+            "management": "codex_switch_manual",
+        })
+    };
     let path = if let Some(explicit) = &explicit {
         explicit.as_str().map(PathBuf::from)
     } else {
@@ -164,7 +194,7 @@ pub(crate) fn catalog_report(profile: &ProviderProfile) -> Value {
             "Some models use generic or untracked metadata; fetch native gateway metadata before assuming V2, patch, image or Lite support.",
         );
     }
-    json!({"source": source, "file_age_seconds": age_seconds, "saved_at": catalog["_codex_switch"]["saved_at"], "models": models, "issues": issues})
+    json!({"source": source, "file_age_seconds": age_seconds, "saved_at": catalog["_codex_switch"]["saved_at"], "catalog_policy": catalog_policy, "models": models, "issues": issues})
 }
 
 pub(crate) fn diagnose(profile: &ProviderProfile, requested_children: &[String]) -> Value {
@@ -340,7 +370,113 @@ pub(crate) fn diagnose(profile: &ProviderProfile, requested_children: &[String])
         "scope": "Saved provider and CODEX_HOME/config.toml plus referenced roles; project/system policy, launch CLI and resumed profiles are not evaluated.",
         "capability_evidence": "Catalog metadata only; tools, SSE, gateway translation and model reachability are not tested.",
         "effective_base_url": effective_base_url,
-        "catalog": {"source": catalog["source"], "file_age_seconds": catalog["file_age_seconds"], "saved_at": catalog["saved_at"]},
+        "catalog": {"source": catalog["source"], "file_age_seconds": catalog["file_age_seconds"], "saved_at": catalog["saved_at"], "catalog_policy": catalog["catalog_policy"]},
         "models": models, "child_models": child_models, "issues": issues
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_report_describes_manual_local_snapshot_and_explicit_file_management() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("models.json");
+        std::fs::write(
+            &path,
+            r#"{"models":[{"slug":"demo/model"}],"_codex_switch":{"saved_at":"2026-10-08T00:00:00Z"}}"#,
+        )
+        .unwrap();
+        let mut profile = ProviderProfile::build(
+            "demo",
+            "https://example.test/v1",
+            vec![ProviderModel::from_id("demo/model")],
+            "sk-test",
+        );
+        profile.codex_config = vec![format!("model_catalog_json={}", path.display())];
+
+        let report = catalog_report(&profile);
+        assert_eq!(report["source"], "explicit");
+        assert_eq!(report["catalog_policy"]["storage"], "local_snapshot");
+        assert_eq!(report["catalog_policy"]["automatic_refresh"], false);
+        assert_eq!(report["catalog_policy"]["refresh_command"], Value::Null);
+        assert_eq!(report["catalog_policy"]["management"], "user_explicit");
+        let issue = report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|issue| {
+                issue["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("model_catalog_json"))
+            })
+            .expect("diagnose must expose local catalog management in its existing issue output");
+        assert_eq!(issue["severity"], "warning");
+        let message = issue["message"].as_str().unwrap();
+        assert!(message.contains("user-managed"), "{message}");
+        assert!(
+            message.contains("does not refresh automatically"),
+            "{message}"
+        );
+        assert!(!message.contains("provider fetch-models"), "{message}");
+    }
+
+    #[test]
+    fn catalog_report_points_managed_cache_to_manual_fetch_models() {
+        let _lock = crate::profile::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("CODEX_SWITCH_HOME");
+        unsafe {
+            std::env::set_var("CODEX_SWITCH_HOME", temp.path());
+        }
+        let provider_dir = temp.path().join("providers/managed");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        std::fs::write(
+            provider_dir.join("models.json"),
+            r#"{"models":[{"slug":"managed/model"}],"_codex_switch":{"saved_at":"2026-10-08T00:00:00Z"}}"#,
+        )
+        .unwrap();
+        let profile = ProviderProfile::build(
+            "managed",
+            "https://example.test/v1",
+            vec![ProviderModel::from_id("managed/model")],
+            "sk-test",
+        );
+
+        let report = catalog_report(&profile);
+        match previous {
+            Some(value) => unsafe { std::env::set_var("CODEX_SWITCH_HOME", value) },
+            None => unsafe { std::env::remove_var("CODEX_SWITCH_HOME") },
+        }
+        assert_eq!(report["catalog_policy"]["storage"], "local_snapshot");
+        assert_eq!(report["catalog_policy"]["automatic_refresh"], false);
+        assert_eq!(
+            report["catalog_policy"]["refresh_command"],
+            "codex-switch provider fetch-models managed"
+        );
+        assert_eq!(
+            report["catalog_policy"]["management"],
+            "codex_switch_manual"
+        );
+        let issue = report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|issue| {
+                issue["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("provider fetch-models managed"))
+            })
+            .expect("diagnose must expose manual refresh for the managed cache");
+        assert_eq!(issue["severity"], "warning");
+        let message = issue["message"].as_str().unwrap();
+        assert!(message.contains("local snapshot"), "{message}");
+        assert!(
+            message.contains("does not refresh automatically"),
+            "{message}"
+        );
+    }
 }

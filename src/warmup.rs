@@ -754,7 +754,13 @@ fn verify_warmup_stream(body: &str) -> Result<()> {
                 completed = true;
             }
             "response.failed" | "response.incomplete" | "error" => {
-                bail!("warmup response stream reported {event_type}")
+                let explanation = warmup_failure_explanation(&event_type, &payload);
+                match explanation {
+                    Some(explanation) => {
+                        bail!("warmup response stream reported {event_type}: {explanation}")
+                    }
+                    None => bail!("warmup response stream reported {event_type}"),
+                }
             }
             _ => {}
         }
@@ -763,6 +769,28 @@ fn verify_warmup_stream(body: &str) -> Result<()> {
         bail!("warmup response stream ended without response.completed");
     }
     Ok(())
+}
+
+fn warmup_failure_explanation(
+    event_type: &str,
+    payload: &serde_json::Value,
+) -> Option<&'static str> {
+    let code = match event_type {
+        "response.incomplete" => payload
+            .pointer("/response/incomplete_details/reason")
+            .and_then(serde_json::Value::as_str),
+        "response.failed" => payload
+            .pointer("/response/error/code")
+            .and_then(serde_json::Value::as_str),
+        "error" => payload.get("code").and_then(serde_json::Value::as_str),
+        _ => None,
+    }?;
+    match code {
+        "content_filter" => Some("content filter policy blocked the response"),
+        "context_length_exceeded" => Some("the model context window was exceeded"),
+        "max_output_tokens" => Some("the maximum output token limit was reached"),
+        _ => None,
+    }
 }
 
 /// Warm one request per additional quota pool.
@@ -1219,6 +1247,59 @@ mod tests {
             .is_err()
         );
         assert!(verify_warmup_stream("event: error\ndata: {\"type\":\"error\"}\n\n").is_err());
+    }
+
+    #[test]
+    fn warmup_sse_known_failure_reasons_are_safe_and_readable() {
+        let cases = [
+            (
+                "response.incomplete",
+                r#"{"type":"response.incomplete","response":{"incomplete_details":{"reason":"content_filter"}}}"#,
+                "content filter",
+            ),
+            (
+                "response.failed",
+                r#"{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"provider detail"}}}"#,
+                "context window",
+            ),
+            (
+                "response.failed",
+                r#"{"type":"response.failed","response":{"error":{"code":"max_output_tokens","message":"provider detail"}}}"#,
+                "output token",
+            ),
+            (
+                "error",
+                r#"{"type":"error","code":"context_length_exceeded","message":"provider detail"}"#,
+                "context window",
+            ),
+        ];
+        for (event, data, explanation) in cases {
+            let body = format!("event: {event}\ndata: {data}\n\n");
+            let error = verify_warmup_stream(&body).unwrap_err().to_string();
+            assert!(error.contains(explanation), "{event}: {error}");
+            assert!(!error.contains("provider detail"), "{event}: {error}");
+        }
+    }
+
+    #[test]
+    fn warmup_sse_unknown_failure_does_not_leak_upstream_details() {
+        let body = r#"event: response.failed
+data: {"type":"response.failed","response":{"error":{"code":"vendor_private_reason","message":"EXTERNAL_SECRET_MUST_NOT_LEAK"}}}
+
+"#;
+        let error = verify_warmup_stream(body).unwrap_err().to_string();
+        assert!(error.contains("response.failed"), "{error}");
+        assert!(!error.contains("vendor_private_reason"), "{error}");
+        assert!(!error.contains("EXTERNAL_SECRET_MUST_NOT_LEAK"), "{error}");
+
+        let top_level = r#"event: error
+data: {"type":"error","code":"vendor_private_reason","message":"EXTERNAL_SECRET_MUST_NOT_LEAK"}
+
+"#;
+        let error = verify_warmup_stream(top_level).unwrap_err().to_string();
+        assert!(error.contains("error"), "{error}");
+        assert!(!error.contains("vendor_private_reason"), "{error}");
+        assert!(!error.contains("EXTERNAL_SECRET_MUST_NOT_LEAK"), "{error}");
     }
 
     #[test]

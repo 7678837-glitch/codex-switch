@@ -13,6 +13,8 @@
 //! on Base URL
 //! so `s` is save, not a character.
 
+use std::collections::BTreeMap;
+
 use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
@@ -29,11 +31,140 @@ use crate::provider::{
     fetch_gateway_models_overrides_blocking, sanitize_provider_id,
 };
 
-/// Reasoning-effort presets. Index 0 skips the override; the rest are saved as
-/// `model_reasoning_effort=<v>`. CLI `--reasoning` remains the escape hatch for
-/// values Codex accepts that are not listed here.
-pub const REASONING_CHOICES: [&str; 7] =
-    ["(skip)", "minimal", "low", "medium", "high", "xhigh", "max"];
+/// Generic reasoning-effort presets. Index 0 skips the override; the rest are
+/// saved as `model_reasoning_effort=<v>`. A model catalog can replace these
+/// with its advertised levels, while CLI `--reasoning` remains the escape
+/// hatch for values Codex accepts that are not listed here.
+pub const REASONING_CHOICES: [&str; 8] = [
+    "(skip)", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReasoningCatalog {
+    /// The catalog has no usable capability information, so keep the manual
+    /// presets available.
+    Unknown,
+    /// The catalog explicitly advertises these levels in display order.
+    Advertised(Vec<String>),
+    /// The catalog explicitly advertises no levels. Only the skip choice is
+    /// available, but a saved/custom value still remains preserved.
+    ExplicitEmpty,
+}
+
+fn reasoning_level(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .or_else(|| value.get("effort").and_then(serde_json::Value::as_str))
+        .or_else(|| {
+            value
+                .get("reasoning_effort")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+        .map(str::to_string)
+}
+
+fn advertised_levels(values: &[serde_json::Value]) -> Vec<String> {
+    let mut levels = Vec::new();
+    for value in values {
+        let Some(level) = reasoning_level(value) else {
+            continue;
+        };
+        if !levels.iter().any(|existing| existing == &level) {
+            levels.push(level);
+        }
+    }
+    levels
+}
+
+pub(crate) fn reasoning_catalog_from_remote(
+    entry: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> ReasoningCatalog {
+    let Some(entry) = entry else {
+        return ReasoningCatalog::Unknown;
+    };
+    let Some(value) = entry.get("supported_reasoning_levels") else {
+        return ReasoningCatalog::Unknown;
+    };
+    let Some(values) = value.as_array() else {
+        return ReasoningCatalog::Unknown;
+    };
+    let levels = advertised_levels(values);
+    if levels.is_empty() {
+        ReasoningCatalog::ExplicitEmpty
+    } else {
+        ReasoningCatalog::Advertised(levels)
+    }
+}
+
+pub(crate) fn reasoning_catalog_from_report_entry(entry: &serde_json::Value) -> ReasoningCatalog {
+    let source = entry["source"].as_str().unwrap_or_default();
+    let Some(value) = entry["capabilities"]["supported_reasoning_levels"].as_array() else {
+        return ReasoningCatalog::Unknown;
+    };
+    let levels = advertised_levels(value);
+    if !levels.is_empty() {
+        return ReasoningCatalog::Advertised(levels);
+    }
+    if matches!(
+        source,
+        "generated" | "generic_gateway" | "generic_fallback" | "legacy_unknown"
+    ) {
+        ReasoningCatalog::Unknown
+    } else {
+        ReasoningCatalog::ExplicitEmpty
+    }
+}
+
+pub(crate) fn reasoning_catalog_from_model_levels(levels: &[String]) -> ReasoningCatalog {
+    if levels.is_empty() {
+        ReasoningCatalog::Unknown
+    } else {
+        let levels = levels
+            .iter()
+            .map(|level| level.trim())
+            .filter(|level| !level.is_empty())
+            .fold(Vec::new(), |mut unique, level| {
+                if !unique.iter().any(|existing| existing == level) {
+                    unique.push(level.to_string());
+                }
+                unique
+            });
+        if levels.is_empty() {
+            ReasoningCatalog::Unknown
+        } else {
+            ReasoningCatalog::Advertised(levels)
+        }
+    }
+}
+
+pub(crate) fn reasoning_choices(catalog: &ReasoningCatalog) -> Vec<String> {
+    let levels = match catalog {
+        ReasoningCatalog::Unknown => REASONING_CHOICES[1..]
+            .iter()
+            .map(|choice| (*choice).to_string())
+            .collect(),
+        ReasoningCatalog::Advertised(levels) => levels.clone(),
+        ReasoningCatalog::ExplicitEmpty => Vec::new(),
+    };
+    std::iter::once(REASONING_CHOICES[0].to_string())
+        .chain(levels)
+        .collect()
+}
+
+pub(crate) fn reasoning_choice_with(
+    value: Option<&str>,
+    choices: &[String],
+) -> (usize, Option<String>) {
+    let Some(value) = value.filter(|v| !v.is_empty()) else {
+        return (0, None);
+    };
+    match choices.iter().position(|choice| choice == value) {
+        Some(idx) => (idx, None),
+        None => (0, Some(value.to_string())),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormMode {
@@ -56,14 +187,17 @@ enum Focus {
 #[derive(Debug, Clone)]
 struct ModelDraft {
     id: String,
+    reasoning_choices: Vec<String>,
     reasoning_idx: usize,
     custom_reasoning: Option<String>,
     no_web_search: bool,
 }
 
 fn empty_model_draft() -> ModelDraft {
+    let reasoning_choices = reasoning_choices(&ReasoningCatalog::Unknown);
     ModelDraft {
         id: String::new(),
+        reasoning_choices,
         reasoning_idx: 0,
         custom_reasoning: None,
         no_web_search: false,
@@ -130,20 +264,39 @@ impl GatewayPickState {
 }
 
 pub(crate) fn reasoning_choice(value: Option<&str>) -> (usize, Option<String>) {
-    let Some(value) = value.filter(|v| !v.is_empty()) else {
-        return (0, None);
-    };
-    match REASONING_CHOICES.iter().position(|choice| *choice == value) {
-        Some(idx) => (idx, None),
-        None => (0, Some(value.to_string())),
-    }
+    let choices = reasoning_choices(&ReasoningCatalog::Unknown);
+    reasoning_choice_with(value, &choices)
 }
 
 fn draft_reasoning_label(draft: &ModelDraft) -> &str {
-    draft
-        .custom_reasoning
-        .as_deref()
-        .unwrap_or(REASONING_CHOICES[draft.reasoning_idx])
+    if let Some(custom) = draft.custom_reasoning.as_deref() {
+        custom
+    } else {
+        draft
+            .reasoning_choices
+            .get(draft.reasoning_idx)
+            .map(String::as_str)
+            .unwrap_or(REASONING_CHOICES[0])
+    }
+}
+
+fn draft_reasoning_value(draft: &ModelDraft) -> Option<String> {
+    if let Some(custom) = &draft.custom_reasoning {
+        Some(custom.clone())
+    } else if draft.reasoning_idx == 0 {
+        None
+    } else {
+        draft.reasoning_choices.get(draft.reasoning_idx).cloned()
+    }
+}
+
+fn rebind_draft_reasoning(draft: &mut ModelDraft, catalog: &ReasoningCatalog) {
+    let value = draft_reasoning_value(draft);
+    draft.reasoning_choices = reasoning_choices(catalog);
+    let (reasoning_idx, custom_reasoning) =
+        reasoning_choice_with(value.as_deref(), &draft.reasoning_choices);
+    draft.reasoning_idx = reasoning_idx;
+    draft.custom_reasoning = custom_reasoning;
 }
 
 pub struct ProviderFormState {
@@ -161,6 +314,7 @@ pub struct ProviderFormState {
     wire_api: String,
     extra_sets: String,
     models: Vec<ModelDraft>,
+    reasoning_catalog: BTreeMap<String, ReasoningCatalog>,
     model_idx: usize,
     model_scroll: usize,
     default_idx: usize,
@@ -198,6 +352,7 @@ impl ProviderFormState {
             wire_api: "responses".to_string(),
             extra_sets: String::new(),
             models: vec![empty_model_draft()],
+            reasoning_catalog: BTreeMap::new(),
             model_idx: 0,
             model_scroll: 0,
             default_idx: 0,
@@ -211,14 +366,30 @@ impl ProviderFormState {
     }
 
     pub fn edit(profile: &ProviderProfile) -> Self {
+        let catalog = crate::provider::diagnostics::catalog_report(profile);
+        let reasoning_catalog = catalog["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                let id = entry["id"].as_str()?.to_string();
+                Some((id, reasoning_catalog_from_report_entry(entry)))
+            })
+            .collect::<BTreeMap<_, _>>();
         let models: Vec<ModelDraft> = profile
             .models
             .iter()
             .map(|model| {
+                let catalog = reasoning_catalog
+                    .get(&model.id)
+                    .cloned()
+                    .unwrap_or(ReasoningCatalog::Unknown);
+                let choices = reasoning_choices(&catalog);
                 let (reasoning_idx, custom_reasoning) =
-                    reasoning_choice(model.reasoning.as_deref());
+                    reasoning_choice_with(model.reasoning.as_deref(), &choices);
                 ModelDraft {
                     id: model.id.clone(),
+                    reasoning_choices: choices,
                     reasoning_idx,
                     custom_reasoning,
                     no_web_search: model.no_web_search,
@@ -252,6 +423,7 @@ impl ProviderFormState {
             } else {
                 models
             },
+            reasoning_catalog,
             model_idx: default_idx.min(profile.models.len().saturating_sub(1)),
             model_scroll: 0,
             default_idx,
@@ -633,22 +805,45 @@ impl ProviderFormState {
         self.default_idx = self.model_idx;
     }
 
+    fn reasoning_catalog_for_model(&self, id: &str) -> ReasoningCatalog {
+        if let Some(remote) = self
+            .fetched_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.iter().find(|model| model.slug == id))
+        {
+            return reasoning_catalog_from_remote(remote.catalog_entry.as_ref());
+        }
+        self.reasoning_catalog
+            .get(id)
+            .cloned()
+            .unwrap_or(ReasoningCatalog::Unknown)
+    }
+
+    fn sync_model_reasoning_choices(&mut self, idx: usize) {
+        let Some(id) = self.models.get(idx).map(|model| model.id.clone()) else {
+            return;
+        };
+        let catalog = self.reasoning_catalog_for_model(&id);
+        rebind_draft_reasoning(&mut self.models[idx], &catalog);
+    }
+
     fn nudge_reasoning(&mut self, delta: i32) {
         if self.focus != Focus::Models || self.is_add_row() {
             return;
         }
+        self.sync_model_reasoning_choices(self.model_idx);
         let draft = &mut self.models[self.model_idx];
         if draft.custom_reasoning.take().is_some() {
             if delta > 0 {
                 draft.reasoning_idx = 0;
             } else {
-                draft.reasoning_idx = REASONING_CHOICES.len() - 1;
+                draft.reasoning_idx = draft.reasoning_choices.len().saturating_sub(1);
             }
             return;
         }
         let idx = &mut draft.reasoning_idx;
         let next = *idx as i32 + delta;
-        if next >= 0 && (next as usize) < REASONING_CHOICES.len() {
+        if next >= 0 && (next as usize) < draft.reasoning_choices.len() {
             *idx = next as usize;
         }
     }
@@ -885,7 +1080,7 @@ impl ProviderFormState {
                 } else if draft.reasoning_idx == 0 {
                     None
                 } else {
-                    Some(REASONING_CHOICES[draft.reasoning_idx].to_string())
+                    draft.reasoning_choices.get(draft.reasoning_idx).cloned()
                 },
                 no_web_search: draft.no_web_search,
             })
@@ -905,19 +1100,37 @@ impl ProviderFormState {
         let (models, default) =
             apply_fetched_models(&existing, current_default.as_deref(), remote, &[])
                 .map_err(|err| err.to_string())?;
-        self.set_saved_models(models, default);
         self.fetched_catalog = Some(remote.to_vec());
+        self.set_saved_models(models, default);
         Ok(())
     }
 
     fn set_saved_models(&mut self, models: Vec<ProviderModel>, default: String) {
+        if let Some(remote) = self.fetched_catalog.clone() {
+            self.reasoning_catalog = remote
+                .iter()
+                .map(|model| {
+                    (
+                        model.slug.clone(),
+                        reasoning_catalog_from_remote(model.catalog_entry.as_ref()),
+                    )
+                })
+                .collect();
+        }
         self.models = models
             .iter()
             .map(|model| {
+                let catalog = self
+                    .reasoning_catalog
+                    .get(&model.id)
+                    .cloned()
+                    .unwrap_or(ReasoningCatalog::Unknown);
+                let choices = reasoning_choices(&catalog);
                 let (reasoning_idx, custom_reasoning) =
-                    reasoning_choice(model.reasoning.as_deref());
+                    reasoning_choice_with(model.reasoning.as_deref(), &choices);
                 ModelDraft {
                     id: model.id.clone(),
+                    reasoning_choices: choices,
                     reasoning_idx,
                     custom_reasoning,
                     no_web_search: model.no_web_search,
@@ -961,12 +1174,14 @@ impl ProviderFormState {
             Focus::BaseUrl => {
                 if self.base_url != value {
                     self.fetched_catalog = None;
+                    self.reasoning_catalog.clear();
                 }
                 self.base_url = value;
             }
             Focus::ApiKey => {
                 if self.api_key != value {
                     self.fetched_catalog = None;
+                    self.reasoning_catalog.clear();
                 }
                 self.api_key = value;
             }
@@ -976,6 +1191,12 @@ impl ProviderFormState {
             Focus::RequireHttps => {}
             Focus::Models if self.model_idx < self.models.len() => {
                 self.models[self.model_idx].id = value;
+                let catalog = self
+                    .reasoning_catalog
+                    .get(&self.models[self.model_idx].id)
+                    .cloned()
+                    .unwrap_or(ReasoningCatalog::Unknown);
+                rebind_draft_reasoning(&mut self.models[self.model_idx], &catalog);
             }
             Focus::Models => {}
         }
@@ -1095,7 +1316,7 @@ impl ProviderFormState {
                 } else if draft.reasoning_idx == 0 {
                     None
                 } else {
-                    Some(REASONING_CHOICES[draft.reasoning_idx].to_string())
+                    draft.reasoning_choices.get(draft.reasoning_idx).cloned()
                 },
                 no_web_search: draft.no_web_search,
             });
@@ -1803,6 +2024,7 @@ mod tests {
 
     #[test]
     fn tab_leaves_models_instead_of_trapping_the_cursor() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -1930,6 +2152,7 @@ mod tests {
 
     #[test]
     fn enter_on_the_add_row_appends_a_model() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -1956,6 +2179,7 @@ mod tests {
 
     #[test]
     fn removing_a_model_asks_before_deleting() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -1991,6 +2215,7 @@ mod tests {
 
     #[test]
     fn last_model_cannot_be_removed_even_with_confirm() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -2015,6 +2240,7 @@ mod tests {
     fn confirm_remove_popup_names_the_model() {
         use ratatui::{Terminal, backend::TestBackend};
 
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -2066,6 +2292,7 @@ mod tests {
     fn form_renders_the_add_model_row() {
         use ratatui::{Terminal, backend::TestBackend};
 
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -2167,6 +2394,7 @@ mod tests {
 
     #[test]
     fn long_model_list_follows_the_cursor_and_keeps_the_form_header() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -2196,6 +2424,7 @@ mod tests {
 
     #[test]
     fn long_model_list_shows_the_add_row_when_selected() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -2218,6 +2447,7 @@ mod tests {
 
     #[test]
     fn long_model_list_keeps_the_first_row_at_the_top() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://openrouter.ai/api/v1",
@@ -2267,6 +2497,165 @@ mod tests {
         assert_eq!(profile.metadata_fallback, "none");
         assert_eq!(profile.wire_api, "responses");
         assert_eq!(profile.codex_config, ["temperature=0", "foo=bar"]);
+    }
+
+    fn remote_with_reasoning_levels(slug: &str, levels: &[&str]) -> RemoteModel {
+        let supported_reasoning_levels = levels
+            .iter()
+            .map(|effort| serde_json::json!({"effort": effort, "description": effort}))
+            .collect::<Vec<_>>();
+        RemoteModel {
+            slug: slug.into(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            input_modalities: vec![],
+            catalog_entry: serde_json::json!({
+                "supported_reasoning_levels": supported_reasoning_levels
+            })
+            .as_object()
+            .cloned(),
+        }
+    }
+
+    fn profile_with_catalog(levels: &[&str]) -> (tempfile::TempDir, ProviderProfile) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models.json");
+        let supported_reasoning_levels = levels
+            .iter()
+            .map(|effort| serde_json::json!({"effort": effort, "description": effort}))
+            .collect::<Vec<_>>();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "models": [{
+                    "slug": "m",
+                    "supported_reasoning_levels": supported_reasoning_levels
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut profile = ProviderProfile::build(
+            "saved-catalog",
+            "https://example.invalid/v1",
+            vec![ProviderModel::from_id("m")],
+            "sk",
+        );
+        let encoded_path = serde_json::to_string(&path.to_string_lossy().to_string()).unwrap();
+        profile.codex_config = vec![format!("model_catalog_json={encoded_path}")];
+        (dir, profile)
+    }
+
+    #[test]
+    fn form_reasoning_follows_advertised_levels_and_includes_ultra() {
+        let _home = EnvHome::new();
+        let original = ProviderProfile::build(
+            "advertised",
+            "https://example.invalid/v1",
+            vec![ProviderModel::from_id("m")],
+            "sk",
+        );
+        let mut form = ProviderFormState::edit(&original);
+        form.focus = Focus::Models;
+        form.fetched_catalog = Some(vec![remote_with_reasoning_levels(
+            "m",
+            &["low", "high", "ultra"],
+        )]);
+
+        for expected in ["low", "high", "ultra"] {
+            form.handle_key(KeyCode::Right);
+            let profile = form.build_profile().expect("advertised reasoning is valid");
+            assert_eq!(profile.models[0].reasoning.as_deref(), Some(expected));
+        }
+        form.handle_key(KeyCode::Right);
+        let profile = form.build_profile().expect("right edge stays selected");
+        assert_eq!(profile.models[0].reasoning.as_deref(), Some("ultra"));
+    }
+
+    #[test]
+    fn form_respects_an_explicit_empty_reasoning_catalog() {
+        let _home = EnvHome::new();
+        let original = ProviderProfile::build(
+            "empty-advertisement",
+            "https://example.invalid/v1",
+            vec![ProviderModel::from_id("m")],
+            "sk",
+        );
+        let mut form = ProviderFormState::edit(&original);
+        form.focus = Focus::Models;
+        form.fetched_catalog = Some(vec![remote_with_reasoning_levels("m", &[])]);
+
+        form.handle_key(KeyCode::Right);
+        let profile = form.build_profile().expect("skip is always valid");
+        assert!(profile.models[0].reasoning.is_none());
+    }
+
+    #[test]
+    fn form_reasoning_falls_back_to_generic_levels_with_ultra() {
+        let _home = EnvHome::new();
+        let original = ProviderProfile::build(
+            "generic",
+            "https://example.invalid/v1",
+            vec![ProviderModel::from_id("m")],
+            "sk",
+        );
+        let mut form = ProviderFormState::edit(&original);
+        form.focus = Focus::Models;
+        for _ in 0..7 {
+            form.handle_key(KeyCode::Right);
+        }
+        let profile = form.build_profile().expect("generic reasoning is valid");
+        assert_eq!(profile.models[0].reasoning.as_deref(), Some("ultra"));
+    }
+
+    #[test]
+    fn form_keeps_custom_reasoning_until_the_user_adjusts_it() {
+        let _home = EnvHome::new();
+        let original = ProviderProfile::build(
+            "custom",
+            "https://example.invalid/v1",
+            vec![ProviderModel {
+                id: "m".into(),
+                reasoning: Some("custom-effort".into()),
+                no_web_search: false,
+            }],
+            "sk",
+        );
+        let mut form = ProviderFormState::edit(&original);
+        form.focus = Focus::Models;
+        form.fetched_catalog = Some(vec![remote_with_reasoning_levels(
+            "m",
+            &["low", "high", "ultra"],
+        )]);
+
+        let profile = form.build_profile().expect("custom reasoning is preserved");
+        assert_eq!(
+            profile.models[0].reasoning.as_deref(),
+            Some("custom-effort")
+        );
+
+        form.handle_key(KeyCode::Right);
+        let profile = form.build_profile().expect("adjusted reasoning is valid");
+        assert!(profile.models[0].reasoning.is_none());
+        form.handle_key(KeyCode::Right);
+        let profile = form.build_profile().expect("advertised reasoning is valid");
+        assert_eq!(profile.models[0].reasoning.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn edit_form_reads_saved_catalog_reasoning_levels() {
+        let (_dir, original) = profile_with_catalog(&["low", "high", "ultra"]);
+        let mut form = ProviderFormState::edit(&original);
+        form.focus = Focus::Models;
+
+        for expected in ["low", "high", "ultra"] {
+            form.handle_key(KeyCode::Right);
+            let profile = form
+                .build_profile()
+                .expect("saved catalog reasoning is valid");
+            assert_eq!(profile.models[0].reasoning.as_deref(), Some(expected));
+        }
     }
 
     #[test]
@@ -2339,6 +2728,7 @@ mod tests {
 
     #[test]
     fn fetch_fills_chat_slugs_and_drops_embeddings() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "demo",
             "https://example.test/v1",
@@ -2408,6 +2798,7 @@ mod tests {
 
     #[test]
     fn fetch_large_catalog_opens_a_picker_instead_of_replacing() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "or",
             "https://openrouter.ai/api/v1",
@@ -2427,6 +2818,7 @@ mod tests {
 
     #[test]
     fn picker_space_and_enter_saves_checked_slugs() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "or",
             "https://openrouter.ai/api/v1",
@@ -2458,6 +2850,7 @@ mod tests {
 
     #[test]
     fn picker_esc_keeps_the_existing_models() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "or",
             "https://openrouter.ai/api/v1",
@@ -2473,6 +2866,7 @@ mod tests {
 
     #[test]
     fn picker_enter_without_a_check_stays_open() {
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "or",
             "https://openrouter.ai/api/v1",
@@ -2493,6 +2887,7 @@ mod tests {
     fn picker_renders_gateway_slugs() {
         use ratatui::{Terminal, backend::TestBackend};
 
+        let _home = EnvHome::new();
         let original = ProviderProfile::build(
             "or",
             "https://openrouter.ai/api/v1",

@@ -110,7 +110,7 @@ if argv == ["--version"]:
         time.sleep(float(os.environ["CS_FAKE_CODEX_VERSION_DELAY"]))
     if os.environ.get("CS_FAKE_CODEX_VERSION_FAIL") == "1":
         sys.exit(7)
-    sys.stdout.write("codex-cli " + os.environ.get("CS_FAKE_CODEX_VERSION", "0.159.2") + "\n")
+    sys.stdout.write("codex-cli " + os.environ.get("CS_FAKE_CODEX_VERSION", "0.161.0") + "\n")
     sys.exit(0)
 if argv == ["--help"]:
     if os.environ.get("CS_FAKE_CODEX_HELP_DELAY"):
@@ -2363,8 +2363,9 @@ fn doctor_reports_path_and_explicit_desktop_engine_versions_as_json() {
         .unwrap_or_else(|error| panic!("expected one JSON report ({error}): {stdout}"));
     assert_eq!(report["ok"], true);
     assert_eq!(report["minimum_version"], "0.159.2");
-    assert_eq!(report["path_cli"]["version"], "0.159.2");
-    assert_eq!(report["desktop_codex"]["version"], "0.159.2");
+    assert_eq!(report["aligned_version"], "0.161.0");
+    assert_eq!(report["path_cli"]["version"], "0.161.0");
+    assert_eq!(report["desktop_codex"]["version"], "0.161.0");
     assert_eq!(report["versions_match"], true);
     assert!(
         report["path_cli"]["executable"]
@@ -2372,6 +2373,40 @@ fn doctor_reports_path_and_explicit_desktop_engine_versions_as_json() {
             .unwrap()
             .contains("codex")
     );
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn doctor_keeps_the_minimum_release_supported_without_calling_it_newer_than_baseline() {
+    let home = temp_home("doctor-supported-older-codex");
+    let (fake_bin, log) = install_fake_codex(&home);
+    let output = run_env(
+        &home,
+        &fake_bin,
+        &log,
+        &["--json", "doctor"],
+        &[("CS_FAKE_CODEX_VERSION", "0.159.2")],
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let report: Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|error| panic!("expected one JSON report ({error}): {stdout}"));
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["minimum_version"], "0.159.2");
+    assert_eq!(report["aligned_version"], "0.161.0");
+    assert_eq!(report["path_cli"]["status"], "supported_older");
+    let note = report["path_cli"]["note"].as_str().unwrap();
+    assert!(
+        note.contains("older than the currently verified baseline"),
+        "{note}"
+    );
+    assert!(!note.contains("newer than"), "{note}");
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
     let _ = fs::remove_dir_all(home);
 }

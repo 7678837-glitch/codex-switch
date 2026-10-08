@@ -7,7 +7,7 @@ use semver::Version;
 use serde::Serialize;
 
 pub(crate) const MINIMUM_CODEX_VERSION: &str = "0.159.2";
-pub(crate) const ALIGNED_CODEX_VERSION: &str = "0.159.2";
+pub(crate) const ALIGNED_CODEX_VERSION: &str = "0.161.0";
 pub(crate) const CLI_UPGRADE_NPM_COMMAND: &str = "npm install -g @openai/codex@latest";
 /// A cold Windows `codex.cmd` start (Node + fnm shim) can take several seconds;
 /// match the 10 s budget of the app-server help probe.
@@ -23,6 +23,9 @@ pub(crate) enum CompatibilityStatus {
     /// carries no release information, so the minimum cannot be checked.
     DevBuild,
     BelowMinimum,
+    /// A released Codex that still meets the minimum but predates the
+    /// currently verified baseline.
+    SupportedOlder,
     Aligned,
     AboveBaselineUnverified,
 }
@@ -66,6 +69,9 @@ impl Probe {
             Some(version) if same_release_core(version, &aligned_version()) => {
                 CompatibilityStatus::Aligned
             }
+            Some(version) if version_is_older_than_aligned(version) => {
+                CompatibilityStatus::SupportedOlder
+            }
             Some(_) => CompatibilityStatus::AboveBaselineUnverified,
         };
         VersionReport {
@@ -75,6 +81,9 @@ impl Probe {
             note: self.failure.clone().or_else(|| match status {
                 CompatibilityStatus::AboveBaselineUnverified => Some(
                     "meets the minimum version, but is newer than the currently verified baseline; full compatibility is not guaranteed".to_string(),
+                ),
+                CompatibilityStatus::SupportedOlder => Some(
+                    "meets the minimum version, but is older than the currently verified baseline; newer baseline capabilities are not assumed".to_string(),
                 ),
                 CompatibilityStatus::DevBuild => Some(
                     "local development build; its version carries no release information, so the minimum version was not checked".to_string(),
@@ -117,6 +126,11 @@ fn version_meets_minimum(version: &Version) -> bool {
 
 fn same_release_core(left: &Version, right: &Version) -> bool {
     (left.major, left.minor, left.patch) == (right.major, right.minor, right.patch)
+}
+
+fn version_is_older_than_aligned(version: &Version) -> bool {
+    let aligned = aligned_version();
+    (version.major, version.minor, version.patch) < (aligned.major, aligned.minor, aligned.patch)
 }
 
 pub(crate) fn minimum_version() -> Version {
@@ -255,6 +269,7 @@ pub(crate) fn doctor_report(desktop_path: Option<&Path>) -> DoctorReport {
         matches!(
             report.status,
             CompatibilityStatus::Aligned
+                | CompatibilityStatus::SupportedOlder
                 | CompatibilityStatus::AboveBaselineUnverified
                 | CompatibilityStatus::DevBuild
         )
@@ -432,6 +447,30 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
+        let aligned = executable(dir.path(), "aligned-codex", "echo 0.161.0");
+        let aligned_report = probe_executable(&aligned).report();
+        assert_eq!(
+            serde_json::to_value(aligned_report.status).unwrap(),
+            "aligned"
+        );
+
+        let supported_older = executable(dir.path(), "supported-older-codex", "echo 0.159.2");
+        let supported_older_report = probe_executable(&supported_older).report();
+        assert!(probe_executable(&supported_older).meets_minimum());
+        assert_eq!(
+            serde_json::to_value(supported_older_report.status).unwrap(),
+            "supported_older"
+        );
+        let supported_older_note = supported_older_report.note.unwrap();
+        assert!(
+            supported_older_note.contains("older than the currently verified baseline"),
+            "{supported_older_note}"
+        );
+        assert!(
+            !supported_older_note.contains("newer than"),
+            "{supported_older_note}"
+        );
+
         let future = executable(dir.path(), "future-codex", "echo 1.0.0");
         let probe = probe_executable(&future);
         assert!(probe.meets_minimum());
@@ -450,13 +489,19 @@ mod tests {
         let release_with_build = executable(dir.path(), "build-codex", "echo 0.159.2+build.7");
         let probe = probe_executable(&release_with_build);
         assert!(probe.meets_minimum());
-        assert_eq!(probe.report().status, CompatibilityStatus::Aligned);
+        assert_eq!(
+            serde_json::to_value(probe.report().status).unwrap(),
+            "supported_older"
+        );
 
-        // A prerelease of the minimum release already has its behavior.
+        // A prerelease of the minimum release remains launch-compatible.
         let prerelease = executable(dir.path(), "prerelease-codex", "echo 0.159.2-rc.1");
         let probe = probe_executable(&prerelease);
         assert!(probe.meets_minimum());
-        assert_eq!(probe.report().status, CompatibilityStatus::Aligned);
+        assert_eq!(
+            serde_json::to_value(probe.report().status).unwrap(),
+            "supported_older"
+        );
         ensure_launch_version(&prerelease).unwrap();
 
         let old_prerelease = executable(dir.path(), "old-pre-codex", "echo 0.159.1-rc.1");
