@@ -118,21 +118,21 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: cargo install cross --locked --git https://github.com/cross-rs/cross --rev 64b5bb4d3d34de062552b9a2093affe77b4ad16a
 
-      - name: Inject version into Cargo.toml
+      - name: Inject version into package manifests
         shell: bash
         run: |
-          VERSION="$RELEASE_VERSION"
-          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
-          rm -f Cargo.toml.bak
-          echo "Building version: ${VERSION}"
+          PYTHON=python3
+          if ! command -v "$PYTHON" >/dev/null 2>&1; then PYTHON=python; fi
+          "$PYTHON" scripts/inject-release-version.py --version "$RELEASE_VERSION"
+          echo "Building version: ${RELEASE_VERSION}"
           grep '^version' Cargo.toml
 
       - name: Build release binary
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            cross build --release --target ${{ matrix.target }}
+            cross build --locked --release --target ${{ matrix.target }}
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --locked --release --target ${{ matrix.target }}
           fi
         shell: bash
 

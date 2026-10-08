@@ -169,8 +169,9 @@ fn ci_runs_build_test_lint_format_audit_and_script_parsers() {
     let workflow = repo_file(".github/workflows/ci.yml");
 
     for command in [
-        "cargo test --all",
-        "cargo clippy --all-targets -- -D warnings",
+        "cargo test --all --locked",
+        "cargo clippy --all-targets --locked -- -D warnings",
+        "cargo build --locked --bin codex-switch",
         "cargo fmt --check",
         "cargo audit",
         "bash -n scripts/install.sh",
@@ -335,6 +336,10 @@ fn release_rejects_shell_metacharacters_in_tags_and_uses_env_in_scripts() {
     assert!(!workflow.contains("VERSION=\"${{ needs.meta.outputs.version }}\""));
     assert!(!workflow.contains("${{ github.ref }}` at ${{ github.sha }}"));
     assert!(workflow.contains("RELEASE_VERSION: ${{ needs.meta.outputs.version }}"));
+    assert!(workflow.contains("scripts/inject-release-version.py --version"));
+    assert!(workflow.contains("cross build --locked --release"));
+    assert!(workflow.contains("cargo build --locked --release"));
+    assert!(!workflow.contains("sed -i.bak"));
     assert!(workflow.contains("persist-credentials: false"));
 }
 

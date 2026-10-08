@@ -39,7 +39,14 @@ jobs:
       - name: Check release gate scripts
         run: |
           bash -n scripts/ci/legacy-upgrade.sh
-          python3 -m py_compile scripts/prepare-release-metadata.py
+          python3 -m py_compile \
+            scripts/prepare-release-metadata.py \
+            scripts/inject-release-version.py \
+            scripts/test_inject_release_version.py \
+            scripts/provider-live-smoke.py \
+            scripts/test_provider_live_smoke.py
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          python3 -m unittest discover -s scripts/ci -p 'test_*.py'
       - name: Check formatting
         run: cargo fmt --check
       # Prebuilt binary instead of compiling cargo-audit on every run.
@@ -101,12 +108,15 @@ jobs:
           }
           if ($failed) { exit 1 }
       - name: Run Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Build distribution binary (Linux)
+        if: runner.os == 'Linux'
+        run: cargo build --locked --bin codex-switch
       - name: Run tests
         shell: pwsh
         run: |
           $logPath = Join-Path $env:RUNNER_TEMP ("codex-switch-cargo-test-{0}.log" -f [guid]::NewGuid())
-          & cargo test --all 2>&1 | Tee-Object -FilePath $logPath
+          & cargo test --all --locked 2>&1 | Tee-Object -FilePath $logPath
           $cargoExitCode = $LASTEXITCODE
           if ($cargoExitCode -ne 0) {
             $tailLines = @(Get-Content -LiteralPath $logPath -Tail 100 -Encoding utf8)
@@ -131,7 +141,42 @@ jobs:
             for ($index = 0; $index -lt $chunks.Count; $index++) {
               $part = $index + 1
               $escaped = $chunks[$index].Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-              Write-Output "::error::cargo test --all failed with exit code $cargoExitCode (part $part/$($chunks.Count)): $escaped"
+              Write-Output "::error::cargo test --all --locked failed with exit code $cargoExitCode (part $part/$($chunks.Count)): $escaped"
             }
           }
           exit $cargoExitCode
+      - name: Download and verify official Codex engine (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CODEX_ENGINE_URL: https://github.com/openai/codex/releases/download/rust-v0.161.0/codex-x86_64-unknown-linux-musl.tar.gz
+          CODEX_ENGINE_SHA256: b1efb95097660d7f2e5a3887618a23f2ea1b0d548078bf92b0f7a5d229a0cef2
+        run: |
+          archive="$RUNNER_TEMP/codex-x86_64-unknown-linux-musl.tar.gz"
+          engine_dir="$RUNNER_TEMP/codex-engine"
+          curl --fail --location --retry 3 --output "$archive" "$CODEX_ENGINE_URL"
+          printf '%s  %s\n' "$CODEX_ENGINE_SHA256" "$archive" | sha256sum --check
+          mkdir -p "$engine_dir"
+          tar xzf "$archive" -C "$engine_dir"
+          test -x "$engine_dir/codex-x86_64-unknown-linux-musl"
+      - name: Run official Codex capability smoke (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          codex="$RUNNER_TEMP/codex-engine/codex-x86_64-unknown-linux-musl"
+          switch="$GITHUB_WORKSPACE/target/debug/codex-switch"
+          python3 scripts/ci/provider-capability-smoke.py \
+            --codex "$codex" \
+            --switch "$switch" \
+            --output "$RUNNER_TEMP/codex-smoke-native" \
+            --catalog native \
+            --child-model \
+            --v2-lifecycle \
+            --resume
+          python3 scripts/ci/provider-capability-smoke.py \
+            --codex "$codex" \
+            --switch "$switch" \
+            --output "$RUNNER_TEMP/codex-smoke-generic" \
+            --catalog generic \
+            --child-model \
+            --resume

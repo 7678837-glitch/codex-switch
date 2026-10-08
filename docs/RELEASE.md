@@ -28,6 +28,8 @@ The Wiki sync workflow publishes the reviewed `docs/wiki/` sources from `dev`. T
 
 The release workflow has a prepublish `legacy-upgrade` gate. After the build matrix, the `attest` job verifies the archive checksums and creates the build-provenance bundle. The gate then runs on Linux, macOS, and Windows for two published updaters, `v0.0.19` and `v20260804.1.0`: it downloads the internal build artifacts and bundle, serves temporary release and tag-reference metadata locally (`scripts/ci/legacy-upgrade.sh` / `.ps1`), and lets each official binary perform its original self-update. The `release` job publishes only after this gate succeeds and reuses the same bundle; the Homebrew job then consumes the same build artifacts and validates their SHA-256 files before generating the formula. The rolling `dev` release is updated in place with `overwrite_files` rather than deleted first.
 
+Release builds use `scripts/inject-release-version.py` to update only the root package version in `Cargo.toml` and the matching local `codex-switch` package entry in `Cargo.lock`. The script validates both files before writing and never resolves or updates dependencies; every release `cargo`/`cross` build uses `--locked`.
+
 ## Version policy
 
 Base versions use the SemVer-compatible `YYYYMMDD.N.0` format:
@@ -66,8 +68,8 @@ Prerequisite: `dev` contains every intended commit and the local worktree is cle
 ```bash
 # 1) Run the local gate. This is a preflight, not the source of release artifacts.
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all --locked
 cargo audit
 bash -n scripts/install.sh
 
