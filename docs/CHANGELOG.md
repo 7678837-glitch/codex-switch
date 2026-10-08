@@ -1,5 +1,15 @@
 # Changelog
 
+## v20261008.1.0 — 2026-10-08
+
+- Codex 对齐基线更新至 `0.161.0`，最低支持版本仍为 `0.159.2`。`doctor` 将满足最低要求但低于基线的版本标为 `supported_older`。
+- TUI provider 表单与启动选择器按模型目录提供推理等级，支持 `ultra`，保留已有显式值；ChatGPT 目录刷新后按值保留本次选择。
+- Provider 诊断说明本地目录不会自动刷新，并区分 `fetch-models` 管理的快照和用户显式指定的目录文件。
+- Warmup 为已识别的 SSE 失败原因提供固定说明，不输出上游错误消息或未知错误码。
+- CI 固定官方 Codex 引擎及校验和，运行本地 provider 冒烟；覆盖原生 V2 生命周期和二次启动后的精确会话恢复。
+- CI 和发布构建使用 `--locked`；发布版本注入只修改根包与锁文件中的本地包版本，保留依赖记录。
+- 新增显式真实网关验证入口：默认 dry-run，自动选择唯一 Luna 候选，最多两次 Responses 请求；用法与真实账号、daemon 验收边界见 [兼容性验证](COMPATIBILITY-TESTING.md)。
+
 ## v20261003.1.0 — 2026-10-03
 
 - **Provider inspection redacts sensitive overrides.** `show`, JSON `list`, and the TUI Extra `-c` field mask credential/header/environment values; environment-variable references remain visible. Saved literal HTTP headers are resolved into child-only environment variables at launch, keeping their values out of Codex argv and native profiles while preserving header precedence.
