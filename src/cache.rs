@@ -8,7 +8,7 @@ use fs4::{FileExt, TryLockError};
 use serde::{Deserialize, Serialize};
 
 use crate::auth;
-use crate::usage::{ResetCredit, UsageError, UsageInfo};
+use crate::usage::{DaybreakAccess, ResetCredit, SubscriptionInfo, UsageError, UsageInfo};
 
 /// How long a confirmed "this account has no workspace name" is trusted.
 ///
@@ -53,6 +53,14 @@ struct CacheEntry {
     individual_limit: Option<Box<crate::usage::SpendControlLimit>>,
     #[serde(default)]
     additional_limits: Vec<crate::usage::AdditionalRateLimit>,
+    #[serde(default)]
+    daybreak: Option<DaybreakAccess>,
+    #[serde(default)]
+    daybreak_error: Option<String>,
+    #[serde(default)]
+    subscription: Option<SubscriptionInfo>,
+    #[serde(default)]
+    subscription_error: Option<String>,
 }
 
 /// A refusal the auth server will repeat for as long as the profile keeps the
@@ -212,6 +220,10 @@ fn to_entry(u: &UsageInfo) -> CacheEntry {
         rate_limit_reached_type: u.rate_limit_reached_type.clone(),
         individual_limit: u.individual_limit.clone(),
         additional_limits: u.additional_limits.clone(),
+        daybreak: u.daybreak.clone(),
+        daybreak_error: u.daybreak_error.clone(),
+        subscription: u.subscription.clone(),
+        subscription_error: u.subscription_error.clone(),
     }
 }
 
@@ -270,6 +282,10 @@ fn from_entry(e: &CacheEntry) -> UsageInfo {
         rate_limit_reached_type: e.rate_limit_reached_type.clone(),
         individual_limit: e.individual_limit.clone(),
         additional_limits: e.additional_limits.clone(),
+        daybreak: e.daybreak.clone(),
+        daybreak_error: e.daybreak_error.clone(),
+        subscription: e.subscription.clone(),
+        subscription_error: e.subscription_error.clone(),
     }
 }
 
@@ -708,6 +724,17 @@ mod tests {
                 primary: None,
                 secondary: None,
             }],
+            daybreak: Some(DaybreakAccess {
+                blue: true,
+                red: false,
+            }),
+            daybreak_error: Some("partial_catalog".to_string()),
+            subscription: Some(SubscriptionInfo {
+                active_until: "2026-12-01T00:00:00Z".to_string(),
+                source: "live".to_string(),
+                checked_at: Some(42),
+            }),
+            subscription_error: None,
             ..Default::default()
         };
 
@@ -723,6 +750,21 @@ mod tests {
         assert_eq!(
             restored.additional_limits[0].metered_feature.as_deref(),
             Some("codex_bengalfox")
+        );
+        assert_eq!(
+            restored.daybreak,
+            Some(DaybreakAccess {
+                blue: true,
+                red: false,
+            })
+        );
+        assert_eq!(
+            restored.subscription,
+            Some(SubscriptionInfo {
+                active_until: "2026-12-01T00:00:00Z".to_string(),
+                source: "live".to_string(),
+                checked_at: Some(42),
+            })
         );
     }
 

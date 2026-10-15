@@ -1,6 +1,6 @@
 # codex-switch
 
-**[OpenAI Codex CLI](https://github.com/openai/codex) 多账号管理工具** — 保存本机 Codex 登录、监控配额，并在下一次会话前选出最佳账号。
+**[OpenAI Codex](https://github.com/openai/codex) 多账号管理工具，支持文件凭据的桌面环境** — 保存本机 Codex 登录、监控配额，并在下一次会话前选出最佳账号。
 
 [English README](README.md) · [**完整文档（Wiki）**](https://github.com/xjoker/codex-switch/wiki) · [中文指南](https://github.com/xjoker/codex-switch/wiki/Chinese-Guide) · [Releases](https://github.com/xjoker/codex-switch/releases)
 
@@ -39,6 +39,10 @@ codex-switch use          # 自动选择并切换到最佳账号
 codex-switch launch       # 用最佳账号启动 Codex
 ```
 
+即使桌面版和 CLI 都未安装，登录、账号管理、额度／订阅／Daybreak 查询和 TUI 仍可独立运行。只有 `launch` 需要 Codex 引擎。macOS 上 PATH 没有 `codex` 时，会发现用户或系统 Applications 中 ChatGPT／Codex 应用的内置引擎。非标准安装位置、其他平台或希望固定某个引擎时，可将 `CODEX_SWITCH_CODEX` 设为可执行文件路径。`launch` 在终端启动该引擎，不会打开桌面 GUI。
+
+用 `codex-switch doctor` 检查引擎选择；`--desktop-codex <路径>` 可额外检查指定的桌面引擎。最低支持版本仍为 `0.159.2`，当前对齐基线为 `0.162.1`。ChatGPT 账号管理需要 `cli_auth_credentials_store = "file"`，不支持 keyring、auto 和 ephemeral 存储。切换后需重新连接或重启已有桌面会话，并确认其中的账号；文件写入或 managed daemon 重启成功不代表已打开的桌面会话即时切号。
+
 ![TUI](docs/tui.png)
 
 ## 功能一览
@@ -55,6 +59,7 @@ codex-switch launch       # 用最佳账号启动 Codex
   codex-switch launch openrouter --model deepseek/deepseek-r1-0528
   ```
 - CLI 与 TUI 展示主额度池和每个模型的独立额度池。
+- 账号刷新同时查询 Daybreak Blue／Red 资格和订阅有效期。TUI 在任一账号具备资格时显示 Daybreak 列，以蓝色／红色太阳图标分别标识；详情区分未知状态和确认无资格。订阅实时结果优先，JWT 兜底标明快照来源及检查时间，不代表一定自动续费。
 - 自适应配速感知评分自动选号，并可直接用它启动 Codex。
 - 切换账号后（`use`、TUI 的 `u`，或会激活凭据的 `login`），若 Codex app-server daemon（Codex 0.157+）正在运行，会执行 `codex app-server daemon restart`，让新会话使用所选账号；可用 `[use] restart_app_server = false` 关闭。ChatGPT 的 `launch` 在 Codex 支持时改为附加 `--no-daemon`。
 - 支持重置卡、一次性配额预热（`warmup`）、强制刷新额度（`list -f`）、JSON 输出和代理。TUI 的 Accounts 页在未勾选账号时用 `u` 切换选中账号并显示进度，`t` 开启当前会话自动刷新，账号菜单中的 `w` 执行一次性预热；不运行常驻服务。

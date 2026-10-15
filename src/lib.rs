@@ -16,6 +16,7 @@ mod cache;
 #[allow(dead_code)]
 mod cli;
 pub mod codex_compat;
+pub(crate) mod codex_runtime;
 #[allow(dead_code)]
 mod color;
 #[allow(dead_code)]

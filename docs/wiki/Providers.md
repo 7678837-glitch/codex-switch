@@ -55,6 +55,8 @@ Optional flags:
 
 `--set` is for overrides that are not per-model. Use dotted provider leaves such as `model_providers.<id>.http_headers.X-Route="team"`; whole `model_providers` tables and whole provider tables are rejected because they cannot be remapped safely to native per-run IDs. Supported HTTP connection leaves are resolved consistently for model fetching, probes and launch. Other values remain Codex configuration overrides.
 
+Codex 0.162.0 and newer also accept `model_providers.<id>.capabilities.external_web_access` (boolean) and `model_providers.<id>.capabilities.remote_compaction` (`"v2"` or `"unsupported"`) through `--set`. These declare the gateway's supported behavior; they do not add that behavior to a gateway. For example, `--set 'model_providers.openrouter.capabilities.remote_compaction="unsupported"'` selects local compaction for that provider.
+
 The alias follows the same rules as a ChatGPT profile (ASCII letters, digits, `_`, `-`, `.`; at most 64 characters) and must not collide with an existing profile, an existing provider, or Codex's reserved ids `openai`, `ollama`, and `lmstudio`.
 
 Inspect, rename, and remove:

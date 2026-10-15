@@ -816,7 +816,10 @@ fn extract_zip_binary(archive_path: &Path, binary_name: &str, output_path: &Path
         let mut entry = archive
             .by_index(index)
             .with_context(|| format!("reading zip entry #{index}"))?;
-        let name = entry.name().replace('\\', "/");
+        let name = entry
+            .name()
+            .with_context(|| format!("reading zip entry name #{index}"))?
+            .replace('\\', "/");
         if Path::new(&name)
             .file_name()
             .and_then(|value| value.to_str())
@@ -1041,6 +1044,30 @@ fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zip_extraction_accepts_windows_separators_without_writing_entry_path() {
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let archive_path = temp.path().join("release.zip");
+        let output_path = temp.path().join("output").join("codex-switch.exe");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&archive_path).unwrap());
+        writer
+            .start_file(
+                r"nested\codex-switch.exe",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(b"updated binary").unwrap();
+        writer.finish().unwrap();
+
+        fs::create_dir_all(output_path.parent().unwrap()).unwrap();
+        extract_zip_binary(&archive_path, "codex-switch.exe", &output_path).unwrap();
+
+        assert_eq!(fs::read(&output_path).unwrap(), b"updated binary");
+        assert!(!temp.path().join("nested").exists());
+    }
 
     #[test]
     fn attestation_verification_pins_repository_workflow_and_release_ref() {

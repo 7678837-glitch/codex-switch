@@ -1,6 +1,39 @@
 # Codex 对齐与验证范围
 
-## 当前基线（2026-10-08）
+## 当前基线（2026-10-15）
+
+- 对齐版本：[Codex 0.162.1](https://github.com/openai/codex/releases/tag/rust-v0.162.1)，commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`；最低支持版本仍为 `0.159.2`。
+- 已对照 `rust-v0.161.0...rust-v0.162.1` 的认证、令牌存储与刷新、账号额度、模型目录和启动源码。核心认证存储、后端额度结构及 `available_access_programs.cyber` 契约保持一致。
+- 0.162.0 的 Provider `capabilities.external_web_access` 与 `capabilities.remote_compaction` 可通过现有 `--set` 传递；省略时由 Codex 和提供方的默认行为决定。原生目录继续保留额外模型元数据。
+- 0.162.1 修复 daemon 特性兼容性比较和多行异步问题显示。本项目继续复用 Codex 的启动逻辑，ChatGPT 独立启动保留已有 `--no-daemon` 路由。
+- Daybreak 资格从每个账号实时模型目录的 `available_access_programs.cyber` 聚合，Blue 和 Red 独立判断；缺少声明时为未知。资格查询的 `client_version` 固定为已对齐的 `0.162.1`：实测 `0.160.0` 目录会省略访问项目，即使账号具备 Blue。启动模型目录仍遵循本机 CLI 版本。目录资格不代表已经启用 Daybreak，也不能替代推理阶段授权。
+- 订阅有效期来自账号路由的 `/backend-api/subscriptions`，实时结果优先；JWT 兜底保留来源与原检查时间。订阅有效期、令牌有效期、配额重置和重置卡到期是不同数据。
+
+### 本地验证（macOS arm64）
+
+- 红灯证据覆盖基线分类、账号元数据契约、实际请求版本、TUI 颜色和窗口布局。桌面新增行为在实现前运行 `cargo test --locked --test test_launch_passthrough <测试名> -- --exact`：`launch_uses_discovered_desktop_engine_when_path_has_no_codex`、`explicit_codex_runtime_override_beats_path_cli` 各 1 项失败；含空格路径的 `desktop_daemon_manual_command_quotes_a_runtime_path_with_spaces` 也先失败。以上测试及桌面重连状态的定向测试已转绿。
+- 转绿：发布候选 `20261015.1.0` 上执行 `cargo test --all --locked`，1013 项全部通过（809 项单元、204 项集成），doc-tests 无适用用例。桌面发现、显式引擎优先、无引擎独立运行、手动恢复命令引用及不受 daemon 管理时的重连提示均包含在验证中。
+- `cargo fmt --check`、`cargo clippy --all-targets --locked -- -D warnings`、`cargo +1.88.0 check --locked`、`cargo build --locked --bin codex-switch` 和 `git diff --check` 通过；`cargo test --doc --locked` 无适用用例。
+- 官方 0.162.1 arm64 引擎压缩包 SHA-256 为 `b293a0fcdd871900a44c0a4f40a1aa401b31e02854f790ebdb8bd5d1177fd1fe`，下载后已校验。
+- 原生目录回环验证通过：11 次 Responses 请求，覆盖 V2/Responses Lite、子任务、消息接收、后续唤醒、中断、MCP 和精确会话恢复。
+- 通用目录回环验证通过：7 次 Responses 请求，覆盖父子模型路由、MCP、再次启动后的精确会话恢复。两组均使用虚拟凭据、本地固定响应和隔离 HOME，不产生模型费用。
+- CI 固定引擎更新为官方 0.162.1 Linux musl 压缩包，SHA-256 为 `86f268d81b898f3e144c5ecff2ad2fda2c5802e042d6195b72538fe0fa125057`。该值来自官方发布资产摘要；本机未运行 Linux/Windows 验证，远端 CI 以发布提交的 GitHub Actions 为准。
+- Daybreak Blue 和订阅接口已做真实账号只读验证；Red 依据官方协议和合成目录验证，没有具备 Red 权限的真实账号验收。
+- 当前锁文件的 `cargo audit` 通过：`rustls` 升至 `0.23.46`、`quinn-proto` 升至 `0.11.18`，原有 7 条公告已消除。2026-10-15 使用包含 1329 条公告的 RustSec 数据库检查 385 个依赖，漏洞和警告均为零。远端 CI 与发布工作流仍须在实际提交上验证。
+
+### 桌面版与独立运行
+
+运行时按 `CODEX_SWITCH_CODEX`、PATH、已知 macOS 桌面应用安装的顺序选择。显式路径会验证可执行性，相对路径先转为绝对路径；无效显式配置不悄悄换用其他引擎。`launch`、HTTP 客户端版本探测及 managed daemon 操作使用同一解析规则。`--desktop-codex` 只为本次 doctor 额外检查指定文件，不持久化选择。
+
+真实桌面引擎已在空 PATH、隔离 HOME 和虚拟凭据下验证：`doctor` 返回成功，自动选中 ChatGPT 应用内置的 `0.162.0-alpha.17.2`；`launch fixture -- --help` 成功并恢复临时凭据。没有调用模型、更新真实账号文件或重启用户桌面应用。另使用同一内置引擎通过原生目录回环验证：11 次模拟 Responses 请求，覆盖 V2 子任务通信、中断、MCP 往返和精确会话恢复。
+
+引擎不可解析时，隔离环境中的 `use` 仍成功。`doctor` 分别报告 `core_account_commands_available = true` 与 `launch_runtime_available = false`，其非零退出只表示启动引擎未就绪。登录、账号管理、查询和 TUI 不要求安装 CLI 或桌面应用；核心命令可用性不表示已登录或认证策略已经验收。
+
+空 PATH 且引擎不可解析时的额度／订阅／Daybreak 查询和缓存测试通过；同样环境下，TUI 的真实终端启动与信号退出测试通过。本次未重新登录真实账号，登录路径依据原生 OAuth 源码及回环协议测试验证。
+
+当前支持文件型 OAuth 凭据。keyring、auto 和 ephemeral 存储仍被明确拒绝；本次未实现 OS keyring 读写。修改文件或重启 managed daemon 不证明已打开的桌面会话已切号，用户须重新连接并确认账号。Windows／Linux 可显式指定引擎；本机未验收这些平台的桌面安装发现或 GUI 行为。
+
+## 0.161.0 历史对齐记录（2026-10-08）
 
 - 对齐版本：[Codex 0.161.0](https://github.com/openai/codex/releases/tag/rust-v0.161.0)，commit `979011409de0a60b52f179721948e65531d26144`。
 - 最低支持版本仍为 `0.159.2`。对齐基线表示已检查的参考实现，不要求用户为本次变更升级最低版本。

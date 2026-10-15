@@ -12,7 +12,8 @@ use super::hitmap::OverlayClick;
 use super::keymap;
 use super::popup;
 use super::theme::{
-    BG, C_BLUE, C_CYAN, C_GRAY, C_GREEN, C_MAGENTA, C_RED, C_WHITE, C_YELLOW, DIM, base, highlight,
+    BG, C_BLUE, C_CYAN, C_GRAY, C_GREEN, C_HIGHLIGHT_BG, C_MAGENTA, C_RED, C_WHITE, C_YELLOW, DIM,
+    base, highlight,
 };
 use crate::jwt::PlanKind;
 use crate::output::{
@@ -265,7 +266,9 @@ fn table_text_widths(
     plans: &[&str],
     show_5h: bool,
     credits_width: Option<u16>,
+    show_daybreak: bool,
 ) -> TableTextWidths {
+    let compact = total_width < 95 && show_5h && credits_width.is_some() && show_daybreak;
     let desired = |header: &str, values: &[&str]| {
         values
             .iter()
@@ -277,21 +280,28 @@ fn table_text_widths(
             .unwrap_or(0)
     };
     let mut widths = TableTextWidths {
-        alias: desired("Alias", aliases).max(5),
-        email: desired("Email", emails).max(5),
-        plan: desired("Plan", plans).max(4),
+        alias: desired("Alias", aliases).max(if compact { 2 } else { 5 }),
+        email: desired("Email", emails).max(if compact { 2 } else { 5 }),
+        plan: desired("Plan", plans).max(if compact { 2 } else { 4 }),
     };
 
     // Base borders, spacing, marker and fixed columns consume 44 cells. The
-    // optional 5h pair and Credits column add their widths plus spacing.
-    let fixed_width = 44 + u16::from(show_5h) * 20 + credits_width.unwrap_or(0);
-    let budget = total_width.saturating_sub(fixed_width).max(14);
+    // Optional 5h, Credits and Daybreak columns add their widths plus spacing.
+    // Keep this conservative so the narrow layout has room to truncate cells
+    // instead of letting adjacent columns bleed into each other.
+    let fixed_width =
+        44 + u16::from(show_5h) * 20 + credits_width.unwrap_or(0) + u16::from(show_daybreak) * 8;
+    let budget = if compact {
+        6
+    } else {
+        total_width.saturating_sub(fixed_width).max(14)
+    };
     let total = u32::from(widths.alias) + u32::from(widths.email) + u32::from(widths.plan);
     let mut excess = total.saturating_sub(u32::from(budget));
     for (width, minimum) in [
-        (&mut widths.email, 5_u16),
-        (&mut widths.plan, 4_u16),
-        (&mut widths.alias, 5_u16),
+        (&mut widths.email, if compact { 2_u16 } else { 5_u16 }),
+        (&mut widths.plan, if compact { 2_u16 } else { 4_u16 }),
+        (&mut widths.alias, if compact { 2_u16 } else { 5_u16 }),
     ] {
         let shrink = excess.min(u32::from(width.saturating_sub(minimum)));
         *width -= shrink as u16;
@@ -331,6 +341,13 @@ fn render_account_table(f: &mut Frame, app: &mut App, area: Rect) {
         .accounts
         .iter()
         .any(|entry| matches!(&entry.usage, UsageStatus::Loaded(usage) if usage.primary.is_some()));
+    let show_daybreak = app.accounts.iter().any(|entry| {
+        matches!(
+            &entry.usage,
+            UsageStatus::Loaded(usage)
+                if usage.daybreak.as_ref().is_some_and(|access| access.blue || access.red)
+        )
+    });
     let credits_width = show_credits.then(|| {
         app.accounts
             .iter()
@@ -367,6 +384,9 @@ fn render_account_table(f: &mut Frame, app: &mut App, area: Rect) {
     header_cells.push(Cell::from("Cards").style(hdr));
     if show_credits {
         header_cells.push(Cell::from("Credits").style(hdr));
+    }
+    if show_daybreak {
+        header_cells.push(Cell::from("Daybreak").style(hdr));
     }
     let header = Row::new(header_cells).height(1);
 
@@ -590,6 +610,9 @@ fn render_account_table(f: &mut Frame, app: &mut App, area: Rect) {
             if show_credits {
                 cells.push(Cell::from(credits_text).style(base().fg(credits_color)));
             }
+            if show_daybreak {
+                cells.push(daybreak_table_cell(&entry.usage));
+            }
             Row::new(cells).height(1)
         };
 
@@ -655,26 +678,31 @@ fn render_account_table(f: &mut Frame, app: &mut App, area: Rect) {
         &plans,
         show_5h,
         credits_width,
+        show_daybreak,
     );
 
+    let compact_columns = area.width < 95 && show_5h && credits_width.is_some() && show_daybreak;
     let mut constraints = vec![
-        Constraint::Length(2),                 // marker
-        Constraint::Length(text_widths.alias), // alias
-        Constraint::Length(text_widths.email), // email
-        Constraint::Length(text_widths.plan),  // plan
-        Constraint::Length(8),                 // status
+        Constraint::Length(2),                                   // marker
+        Constraint::Length(text_widths.alias),                   // alias
+        Constraint::Length(text_widths.email),                   // email
+        Constraint::Length(text_widths.plan),                    // plan
+        Constraint::Length(if compact_columns { 4 } else { 8 }), // status
     ];
     if show_5h {
-        constraints.push(Constraint::Length(6)); // 5h %
+        constraints.push(Constraint::Length(if compact_columns { 4 } else { 6 })); // 5h %
     }
-    constraints.push(Constraint::Length(6)); // 7d %
+    constraints.push(Constraint::Length(if compact_columns { 4 } else { 6 })); // 7d %
     if show_5h {
-        constraints.push(Constraint::Length(12)); // 5h reset
+        constraints.push(Constraint::Length(if compact_columns { 7 } else { 12 })); // 5h reset
     }
-    constraints.push(Constraint::Length(12)); // 7d reset
-    constraints.push(Constraint::Length(7)); // reset cards
+    constraints.push(Constraint::Length(if compact_columns { 7 } else { 12 })); // 7d reset
+    constraints.push(Constraint::Length(if compact_columns { 4 } else { 7 })); // reset cards
     if let Some(credits_width) = credits_width {
         constraints.push(Constraint::Length(credits_width.saturating_sub(1)));
+    }
+    if show_daybreak {
+        constraints.push(Constraint::Length(8));
     }
 
     let table = Table::new(rows, constraints)
@@ -686,7 +714,11 @@ fn render_account_table(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_style(base().fg(C_BLUE))
                 .style(base()),
         )
-        .row_highlight_style(highlight())
+        .row_highlight_style(
+            Style::default()
+                .bg(C_HIGHLIGHT_BG)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(base());
 
     f.render_stateful_widget(table, area, &mut table_state);
@@ -723,15 +755,21 @@ fn usage_gauges_height(usage: &UsageInfo) -> u16 {
 }
 
 fn detail_panel_height(app: &App) -> u16 {
-    let gauges = app
+    let (gauges, metadata_lines) = app
         .selected_account_idx()
         .and_then(|idx| app.accounts.get(idx))
         .and_then(|entry| match &entry.usage {
-            UsageStatus::Loaded(usage) => Some(usage_gauges_height(usage)),
+            UsageStatus::Loaded(usage) => Some((
+                usage_gauges_height(usage),
+                u16::try_from(
+                    daybreak_detail_lines(usage).len() + subscription_detail_lines(usage).len(),
+                )
+                .unwrap_or(u16::MAX),
+            )),
             _ => None,
         })
-        .unwrap_or(4);
-    gauges.saturating_add(4)
+        .unwrap_or((4, 0));
+    gauges.saturating_add(metadata_lines).saturating_add(4)
 }
 
 fn render_detail_panel(f: &mut Frame, app: &App, area: Rect) {
@@ -779,7 +817,30 @@ fn render_detail_panel(f: &mut Frame, app: &App, area: Rect) {
             f.render_widget(p, layout[0]);
         }
         UsageStatus::Loaded(u) => {
-            render_usage_gauges(f, u, layout[0]);
+            let mut metadata = daybreak_detail_lines(u);
+            metadata.extend(subscription_detail_lines(u));
+            let metadata_height = u16::try_from(metadata.len()).unwrap_or(u16::MAX);
+            let gauges_height = usage_gauges_height(u).min(layout[0].height);
+            if gauges_height > 0 {
+                render_usage_gauges(
+                    f,
+                    u,
+                    Rect {
+                        height: gauges_height,
+                        ..layout[0]
+                    },
+                );
+            }
+            if metadata_height > 0 && gauges_height < layout[0].height {
+                f.render_widget(
+                    Paragraph::new(metadata).style(base()),
+                    Rect {
+                        y: layout[0].y.saturating_add(gauges_height),
+                        height: layout[0].height.saturating_sub(gauges_height),
+                        ..layout[0]
+                    },
+                );
+            }
         }
     }
 }
@@ -1122,6 +1183,117 @@ fn credits_table_text(u: &UsageInfo) -> String {
     } else {
         "--".to_string()
     }
+}
+
+const DAYBREAK_SUN: &str = "☀\u{FE0E}";
+
+fn daybreak_table_cell(status: &UsageStatus) -> Cell<'static> {
+    match status {
+        UsageStatus::Idle => Cell::from("--").style(base().fg(DIM)),
+        UsageStatus::Loading => Cell::from("...").style(base().fg(C_YELLOW)),
+        UsageStatus::Error(_) => Cell::from("Err").style(base().fg(C_RED)),
+        UsageStatus::Loaded(usage) => {
+            let Some(access) = &usage.daybreak else {
+                return Cell::from("?").style(base().fg(DIM));
+            };
+            let incomplete = usage.daybreak_error.is_some();
+            let mut spans = Vec::new();
+            if access.blue {
+                spans.push(Span::styled(DAYBREAK_SUN, base().fg(C_BLUE)));
+            }
+            if access.red {
+                if !spans.is_empty() {
+                    spans.push(Span::styled(" ", base()));
+                }
+                spans.push(Span::styled(DAYBREAK_SUN, base().fg(C_RED)));
+            }
+            if spans.is_empty() {
+                spans.push(Span::styled(
+                    if incomplete { "?" } else { "--" },
+                    base().fg(if incomplete { C_YELLOW } else { DIM }),
+                ));
+            } else if incomplete && !(access.blue && access.red) {
+                spans.push(Span::styled(" ?", base().fg(C_YELLOW)));
+            }
+            Cell::from(Line::from(spans))
+        }
+    }
+}
+
+pub(super) fn daybreak_detail_lines(u: &UsageInfo) -> Vec<Line<'static>> {
+    let (blue, red) = match &u.daybreak {
+        Some(access) if u.daybreak_error.is_none() => (
+            if access.blue {
+                "available"
+            } else {
+                "not available"
+            },
+            if access.red {
+                "available"
+            } else {
+                "not available"
+            },
+        ),
+        Some(access) => (
+            if access.blue { "available" } else { "unknown" },
+            if access.red { "available" } else { "unknown" },
+        ),
+        None => ("unknown", "unknown"),
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled("Daybreak  ", base().fg(C_CYAN).add_modifier(Modifier::BOLD)),
+        Span::styled("Blue ", base().fg(C_BLUE)),
+        Span::styled(
+            blue,
+            base().fg(if blue == "available" { C_BLUE } else { DIM }),
+        ),
+        Span::styled("  Red ", base().fg(C_RED)),
+        Span::styled(red, base().fg(if red == "available" { C_RED } else { DIM })),
+    ])];
+    if let Some(error) = &u.daybreak_error {
+        let message = if error == "partial_catalog" {
+            "Daybreak catalogue incomplete; unlisted access is unknown".to_string()
+        } else {
+            format!("Daybreak directory unavailable: {error}")
+        };
+        lines.push(Line::from(Span::styled(message, base().fg(C_YELLOW))));
+    }
+    lines
+}
+
+pub(super) fn subscription_detail_lines(u: &UsageInfo) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(subscription) = &u.subscription {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Subscription valid until  ",
+                base().fg(C_CYAN).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                crate::output::format_local_datetime(&subscription.active_until),
+                base().fg(C_WHITE),
+            ),
+        ]));
+        let source = if subscription.source == "token" {
+            match subscription.checked_at {
+                Some(checked_at) => format!(
+                    "Subscription source: token snapshot · checked {}",
+                    crate::output::format_local_timestamp(checked_at)
+                ),
+                None => "Subscription source: token snapshot".to_string(),
+            }
+        } else {
+            "Subscription source: live query".to_string()
+        };
+        lines.push(Line::from(Span::styled(source, base().fg(DIM))));
+    }
+    if let Some(error) = &u.subscription_error {
+        lines.push(Line::from(Span::styled(
+            format!("Subscription status unavailable: {error}"),
+            base().fg(C_YELLOW),
+        )));
+    }
+    lines
 }
 
 /// Match `color::credits`: unlimited is green, empty balances are red, and
@@ -1958,12 +2130,14 @@ mod tests {
         C_BLUE, C_CYAN, C_GRAY, C_GREEN, C_MAGENTA, C_RED, C_WHITE, C_YELLOW, DIM,
         credits_table_color, credits_table_text, plan_color, render_account_table,
         render_status_bar, render_usage_gauges, reset_cards_color, reset_cards_table_state,
-        status_bar_height, status_message_color, table_text_widths, usage_gauges_height,
-        version_area,
+        status_bar_height, status_message_color, subscription_detail_lines, table_text_widths,
+        usage_gauges_height, version_area,
     };
     use crate::jwt::AccountInfo;
     use crate::tui::app::{AccountEntry, App, Tab, UsageStatus};
-    use crate::usage::{AdditionalRateLimit, ResetCredit, UsageInfo, WindowUsage};
+    use crate::usage::{
+        AdditionalRateLimit, DaybreakAccess, ResetCredit, SubscriptionInfo, UsageInfo, WindowUsage,
+    };
     use ratatui::style::Modifier;
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
     use std::io::Write;
@@ -2066,7 +2240,7 @@ mod tests {
             .draw(|frame| render_status_bar(frame, &mut app, frame.area()))
             .unwrap();
         assert!(
-            row_text(narrow.backend(), 0).starts_with("UPGRADE CODEX CLI"),
+            row_text(narrow.backend(), 0).starts_with("UPGRADE CODEX RUNTIME"),
             "{}",
             row_text(narrow.backend(), 0)
         );
@@ -2076,7 +2250,7 @@ mod tests {
             .draw(|frame| render_status_bar(frame, &mut app, frame.area()))
             .unwrap();
         assert!(
-            row_text(narrow.backend(), 0).starts_with("UPGRADE CODEX CLI"),
+            row_text(narrow.backend(), 0).starts_with("UPGRADE CODEX RUNTIME"),
             "the long stale warning must not hide the upgrade action: {}",
             row_text(narrow.backend(), 0)
         );
@@ -2093,7 +2267,7 @@ mod tests {
         terminal
             .draw(|frame| render_status_bar(frame, &mut app, frame.area()))
             .unwrap();
-        assert!(row_text(terminal.backend(), 0).contains("UPGRADE CODEX CLI"));
+        assert!(row_text(terminal.backend(), 0).contains("UPGRADE CODEX RUNTIME"));
         let hints = (1..height as u16)
             .map(|y| row_text(terminal.backend(), y))
             .collect::<String>();
@@ -2570,6 +2744,7 @@ mod tests {
             &["Pro 20×", "Team - NightCity Workspace"],
             true,
             Some(11),
+            false,
         );
 
         assert!(widths.alias >= "a-very-long-account-alias".chars().count() as u16);
@@ -2585,6 +2760,7 @@ mod tests {
             &["Team - NightCity Workspace"],
             true,
             Some(11),
+            false,
         );
 
         assert!(widths.alias + widths.email + widths.plan <= 16);
@@ -2595,7 +2771,7 @@ mod tests {
         let alias = "a".repeat(45);
         let email = format!("{}@example.com", "e".repeat(40));
         let plan = format!("Team - {}", "Workspace".repeat(5));
-        let widths = table_text_widths(260, &[&alias], &[&email], &[&plan], true, Some(11));
+        let widths = table_text_widths(260, &[&alias], &[&email], &[&plan], true, Some(11), false);
 
         assert_eq!(widths.alias, alias.len() as u16);
         assert_eq!(widths.email, email.len() as u16);
@@ -2642,6 +2818,69 @@ mod tests {
         let none = UsageInfo::default();
         assert_eq!(credits_table_text(&none), "--");
         assert_eq!(credits_table_color(&none), DIM);
+    }
+
+    #[test]
+    fn subscription_details_expose_snapshot_time_and_query_errors() {
+        let usage = UsageInfo {
+            subscription: Some(SubscriptionInfo {
+                active_until: "2026-11-14T02:40:00Z".into(),
+                source: "token".into(),
+                checked_at: Some(1_783_857_600),
+            }),
+            subscription_error: Some("subscription unavailable (HTTP 403)".into()),
+            ..Default::default()
+        };
+        let lines = subscription_detail_lines(&usage)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(lines.contains("Subscription valid until"), "{lines}");
+        assert!(lines.contains("token snapshot"), "{lines}");
+        assert!(lines.contains("checked"), "{lines}");
+        assert!(
+            lines.contains("subscription unavailable (HTTP 403)"),
+            "{lines}"
+        );
+    }
+
+    #[test]
+    fn short_detail_panel_keeps_quota_visible_with_account_metadata() {
+        let mut app = App::new();
+        app.accounts.push(AccountEntry {
+            alias: "short".into(),
+            info: AccountInfo::default(),
+            usage: UsageStatus::Loaded(Box::new(UsageInfo {
+                primary: Some(WindowUsage {
+                    used_percent: Some(20.0),
+                    window_minutes: Some(300),
+                    ..Default::default()
+                }),
+                subscription: Some(SubscriptionInfo {
+                    active_until: "2030-01-01T00:00:00Z".into(),
+                    source: "live".into(),
+                    checked_at: None,
+                }),
+                ..Default::default()
+            })),
+            is_current: true,
+        });
+        app.view_indices.push(0);
+        let mut terminal = Terminal::new(TestBackend::new(120, 7)).unwrap();
+        terminal
+            .draw(|frame| super::render_detail_panel(frame, &app, frame.area()))
+            .unwrap();
+        let text = (0..7)
+            .map(|y| row_text(terminal.backend(), y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("5h"), "metadata hid the quota: {text}");
     }
 
     #[test]
@@ -2700,6 +2939,131 @@ mod tests {
         assert!(
             !joined.contains("62,500 credits"),
             "unit is shown by the header:\n{joined}"
+        );
+    }
+
+    #[test]
+    fn account_table_shows_daybreak_only_when_any_account_has_access() {
+        let mut app = App::new();
+        app.accounts.push(AccountEntry {
+            alias: "blue".into(),
+            info: AccountInfo::default(),
+            usage: UsageStatus::Loaded(Box::new(UsageInfo {
+                daybreak: Some(DaybreakAccess {
+                    blue: true,
+                    red: false,
+                }),
+                credits_balance: Some(1_234_567.0),
+                primary: Some(WindowUsage {
+                    used_percent: Some(20.0),
+                    resets_at: Some(crate::auth::now_unix_secs() + 3600),
+                    window_minutes: Some(300),
+                }),
+                ..Default::default()
+            })),
+            is_current: true,
+        });
+        app.accounts.push(AccountEntry {
+            alias: "red".into(),
+            info: AccountInfo::default(),
+            usage: UsageStatus::Loaded(Box::new(UsageInfo {
+                daybreak: Some(DaybreakAccess {
+                    blue: false,
+                    red: true,
+                }),
+                ..Default::default()
+            })),
+            is_current: false,
+        });
+        app.accounts.push(AccountEntry {
+            alias: "both".into(),
+            info: AccountInfo::default(),
+            usage: UsageStatus::Loaded(Box::new(UsageInfo {
+                daybreak: Some(DaybreakAccess {
+                    blue: true,
+                    red: true,
+                }),
+                ..Default::default()
+            })),
+            is_current: false,
+        });
+        app.accounts.push(AccountEntry {
+            alias: "unknown".into(),
+            info: AccountInfo::default(),
+            usage: UsageStatus::Loaded(Box::default()),
+            is_current: false,
+        });
+        app.view_indices.extend([0, 1, 2, 3]);
+
+        let backend = TestBackend::new(120, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_account_table(frame, &mut app, frame.area()))
+            .unwrap();
+        let rows = (0..8)
+            .map(|y| row_text(terminal.backend(), y))
+            .collect::<Vec<_>>();
+        let header = rows.iter().find(|line| line.contains("Alias")).unwrap();
+        assert!(header.contains("Daybreak"), "{header}");
+        assert!(header.contains("Credits"), "{header}");
+        assert!(header.contains("5h"), "{header}");
+        assert!(
+            rows.join("\n").contains('?'),
+            "unknown access must stay distinct"
+        );
+        let buffer = terminal.backend().buffer();
+        let sun_colors = (0..8)
+            .flat_map(|y| (0..120).filter_map(move |x| buffer.cell((x, y))))
+            .filter(|cell| cell.symbol().starts_with('☀'))
+            .map(|cell| cell.fg)
+            .collect::<Vec<_>>();
+        assert!(
+            sun_colors.contains(&C_BLUE),
+            "Blue marker must use C_BLUE: {sun_colors:?}"
+        );
+        assert!(
+            sun_colors.contains(&C_RED),
+            "Red marker must use C_RED: {sun_colors:?}"
+        );
+        let selected_colors = (0..120)
+            .filter_map(|x| buffer.cell((x, 2)))
+            .filter(|cell| cell.symbol().starts_with('☀'))
+            .map(|cell| cell.fg)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected_colors,
+            vec![C_BLUE],
+            "selection changed the access color"
+        );
+
+        let text_widths = table_text_widths(
+            80,
+            &["a-very-long-account-alias"],
+            &["a-very-long-address@example.com"],
+            &["Team - NightCity Workspace"],
+            true,
+            Some(11),
+            true,
+        );
+        assert!(text_widths.alias + text_widths.email + text_widths.plan <= 6);
+
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_account_table(frame, &mut app, frame.area()))
+            .unwrap();
+        assert_eq!(row_text(terminal.backend(), 0).chars().count(), 80);
+        let narrow = (0..8)
+            .map(|y| row_text(terminal.backend(), y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            narrow.contains('☀'),
+            "Daybreak marker was squeezed out: {narrow}"
+        );
+        assert!(
+            narrow.contains("1,234,567"),
+            "credits were truncated: {narrow}"
         );
     }
 }

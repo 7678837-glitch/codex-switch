@@ -503,6 +503,10 @@ impl MenuState {
                 for item in &info.usage_meta {
                     left_lines.push(Line::from(Span::styled(item.clone(), dim)));
                 }
+                if let Some(usage) = info.usage.as_deref() {
+                    left_lines.extend(super::ui::daybreak_detail_lines(usage));
+                    left_lines.extend(super::ui::subscription_detail_lines(usage));
+                }
                 let credits_text = match info.usage.as_deref() {
                     Some(u) if u.unlimited_credits == Some(true) => "unlimited".to_string(),
                     Some(u) => match u.credits_balance {

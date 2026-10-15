@@ -434,7 +434,7 @@ impl App {
             return None;
         }
         Some(format!(
-            "UPGRADE CODEX CLI: {} < {}",
+            "UPGRADE CODEX RUNTIME: {} < {}",
             report.version.as_deref().unwrap_or("unknown"),
             crate::codex_compat::MINIMUM_CODEX_VERSION,
         ))
@@ -445,17 +445,18 @@ impl App {
         (report.status == crate::codex_compat::CompatibilityStatus::BelowMinimum).then(|| {
             vec![
                 format!(
-                    "UPGRADE REQUIRED: PATH CLI {} < minimum {}.",
+                    "UPGRADE REQUIRED: Codex runtime {} < minimum {}.",
                     report.version.as_deref().unwrap_or("unknown"),
                     crate::codex_compat::MINIMUM_CODEX_VERSION,
                 ),
                 "Upgrade using your original installation method.".to_string(),
-                "npm example (same Node.js/fnm environment):".to_string(),
+                "Desktop engine: update the desktop application.".to_string(),
+                "PATH CLI npm example (same Node.js/fnm environment):".to_string(),
                 crate::codex_compat::CLI_UPGRADE_NPM_COMMAND.to_string(),
                 "Restart the terminal and TUI after upgrading.".to_string(),
                 "Verify with codex --version or codex-switch doctor.".to_string(),
                 format!(
-                    "PATH: {}",
+                    "Executable: {}",
                     report
                         .executable
                         .as_deref()
@@ -2439,24 +2440,18 @@ impl App {
                         status.push_str("; app-server daemon restarted");
                         self.set_status(status, seconds.max(5));
                     }
-                    DaemonRestart::Disabled => {
-                        status.push_str(
-                            "; app-server daemon still holds the previous account (use.restart_app_server = false) -- run `codex app-server daemon restart`",
-                        );
-                        self.set_status(status, seconds.max(8));
-                    }
-                    DaemonRestart::Failed(detail) => {
-                        tracing::warn!(
-                            action = "switch",
-                            alias = %alias,
-                            outcome = "completed",
-                            error = %detail,
-                            "account switched but the Codex app-server daemon did not restart"
-                        );
-                        status.push_str(&format!(
-                            "; app-server daemon still holds the previous account ({detail}) -- run `codex app-server daemon restart`"
-                        ));
-                        self.set_status_error(status, 10);
+                    notice => {
+                        if let Some(message) = notice.message(&alias) {
+                            status.push_str("; ");
+                            status.push_str(&message);
+                        }
+                        if notice.is_failure() {
+                            tracing::warn!(action = "switch", alias = %alias, outcome = "completed",
+                                "account switched but the Codex app-server daemon did not restart");
+                            self.set_status_error(status, 10);
+                        } else {
+                            self.set_status(status, seconds.max(8));
+                        }
                     }
                 }
             }
@@ -5276,7 +5271,7 @@ mod tests {
         });
 
         let warning = app.codex_compatibility_warning().unwrap();
-        assert!(warning.contains("UPGRADE CODEX CLI"));
+        assert!(warning.contains("UPGRADE CODEX RUNTIME"));
         assert!(warning.contains("0.154.0"));
         assert!(warning.contains("0.159.2"));
         let instructions = app.codex_upgrade_instructions().unwrap();
@@ -5315,6 +5310,20 @@ mod tests {
         });
         assert!(app.codex_compatibility_warning().is_none());
         assert!(app.codex_upgrade_instructions().is_none());
+    }
+
+    #[test]
+    fn desktop_switch_prompts_to_reconnect_the_open_session() {
+        let mut app = App::new();
+        app.switching_alias = Some("work".into());
+        app.finish_switch(super::SwitchCompletion::Succeeded {
+            alias: "work".into(),
+            current: "work".into(),
+            last_used_error: None,
+            daemon: crate::app_server::DaemonRestart::DesktopReconnectRequired,
+        });
+        assert!(app.status_msg.as_deref().unwrap().contains("reconnect"));
+        assert!(!app.status_is_error);
     }
 
     #[tokio::test(flavor = "current_thread")]

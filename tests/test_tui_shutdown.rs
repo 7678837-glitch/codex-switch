@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[test]
-fn tui_sigterm_restores_its_lifecycle_and_exits_143() {
+fn tui_without_a_runtime_starts_and_restores_its_terminal_on_sigterm() {
     let home = tempfile::tempdir().expect("temporary app home");
     let mut master_fd = -1;
     let mut slave_fd = -1;
@@ -33,6 +33,8 @@ fn tui_sigterm_restores_its_lifecycle_and_exits_143() {
         .arg("tui")
         .env("CODEX_SWITCH_HOME", home.path())
         .env("CODEX_HOME", home.path().join("codex"))
+        .env("PATH", "")
+        .env("CODEX_SWITCH_CODEX", home.path().join("no-codex-runtime"))
         .stdin(Stdio::from(slave.try_clone().expect("clone PTY")))
         .stdout(Stdio::from(slave.try_clone().expect("clone PTY")))
         .stderr(Stdio::from(slave))

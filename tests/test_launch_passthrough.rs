@@ -84,6 +84,7 @@ except Exception:
 data.append({
     "argv": sys.argv[1:],
     "pid": os.getpid(),
+    "runtime": os.environ.get("CS_FAKE_CODEX_RUNTIME"),
     "codex_home": os.environ.get("CODEX_HOME"),
     "header_env": {k: v for k, v in os.environ.items() if k.startswith("CODEX_SWITCH_HEADER_")},
 })
@@ -110,7 +111,7 @@ if argv == ["--version"]:
         time.sleep(float(os.environ["CS_FAKE_CODEX_VERSION_DELAY"]))
     if os.environ.get("CS_FAKE_CODEX_VERSION_FAIL") == "1":
         sys.exit(7)
-    sys.stdout.write("codex-cli " + os.environ.get("CS_FAKE_CODEX_VERSION", "0.161.0") + "\n")
+    sys.stdout.write("codex-cli " + os.environ.get("CS_FAKE_CODEX_VERSION", "0.162.1") + "\n")
     sys.exit(0)
 if argv == ["--help"]:
     if os.environ.get("CS_FAKE_CODEX_HELP_DELAY"):
@@ -319,6 +320,27 @@ fn install_fake_codex(home: &Path) -> (PathBuf, PathBuf) {
     (bin_dir, log)
 }
 
+#[cfg(target_os = "macos")]
+fn install_fake_desktop_codex(home: &Path, fake_bin: &Path) -> PathBuf {
+    let executable = home.join(
+        "Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+    );
+    fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    let fake = fake_bin.join("codex");
+    fs::write(
+        &executable,
+        format!(
+            "#!/bin/sh\nCS_FAKE_CODEX_RUNTIME=desktop exec {} \"$@\"\n",
+            shell_quote(&fake)
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&executable).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&executable, perms).unwrap();
+    executable
+}
+
 /// Argv of a codex-switch probe (`--version`, `--help`, `app-server daemon …`)
 /// rather than a launched Codex session.
 fn is_probe(argv: &[String]) -> bool {
@@ -338,6 +360,15 @@ fn recorded_argv(log: &Path) -> Vec<Vec<String>> {
                 .map(|v| v.as_str().unwrap().to_string())
                 .collect()
         })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn recorded_runtimes(log: &Path) -> Vec<Option<String>> {
+    let raw = fs::read_to_string(log).unwrap();
+    let data: Vec<Value> = serde_json::from_str(&raw).unwrap();
+    data.into_iter()
+        .map(|entry| entry["runtime"].as_str().map(str::to_string))
         .collect()
 }
 
@@ -2080,6 +2111,30 @@ fn use_restarts_a_running_app_server_daemon() {
 }
 
 #[test]
+fn use_switches_the_file_backed_profile_without_a_codex_runtime() {
+    let home = temp_home("use-without-runtime");
+    let (fake_bin, log) = install_fake_codex(&home);
+    setup_chatgpt(&home);
+
+    let output = run_env(
+        &home,
+        &fake_bin,
+        &log,
+        &["use", "work"],
+        &[("CODEX_SWITCH_CODEX", "/definitely/missing/codex")],
+    );
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Switched to profile: work"));
+    assert!(daemon_argv(&log).is_empty());
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
 fn use_does_not_restart_the_daemon_when_the_live_auth_is_unchanged() {
     let home = temp_home("use-daemon-unchanged");
     let (fake_bin, log) = install_fake_codex(&home);
@@ -2131,7 +2186,7 @@ fn use_leaves_a_stopped_app_server_daemon_alone() {
 }
 
 #[test]
-fn use_reports_a_failed_daemon_restart_without_failing_the_switch() {
+fn use_reports_an_unmanaged_server_without_failing_the_switch() {
     let home = temp_home("use-daemon-restart-fails");
     let (fake_bin, log) = install_fake_codex(&home);
     setup_chatgpt(&home);
@@ -2151,9 +2206,9 @@ fn use_reports_a_failed_daemon_restart_without_failing_the_switch() {
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(stdout.contains("Switched to profile: work"), "{stdout}");
     assert!(
-        stderr.contains("still holds the previous account")
-            && stderr.contains("not managed by codex app-server daemon")
-            && stderr.contains("codex app-server daemon restart"),
+        stderr.contains("not managed by the daemon")
+            && stderr.contains("Reconnect or restart its owning application")
+            && stderr.contains("confirm account 'work'"),
         "{stderr}"
     );
     assert!(
@@ -2363,9 +2418,9 @@ fn doctor_reports_path_and_explicit_desktop_engine_versions_as_json() {
         .unwrap_or_else(|error| panic!("expected one JSON report ({error}): {stdout}"));
     assert_eq!(report["ok"], true);
     assert_eq!(report["minimum_version"], "0.159.2");
-    assert_eq!(report["aligned_version"], "0.161.0");
-    assert_eq!(report["path_cli"]["version"], "0.161.0");
-    assert_eq!(report["desktop_codex"]["version"], "0.161.0");
+    assert_eq!(report["aligned_version"], "0.162.1");
+    assert_eq!(report["path_cli"]["version"], "0.162.1");
+    assert_eq!(report["desktop_codex"]["version"], "0.162.1");
     assert_eq!(report["versions_match"], true);
     assert!(
         report["path_cli"]["executable"]
@@ -2399,7 +2454,7 @@ fn doctor_keeps_the_minimum_release_supported_without_calling_it_newer_than_base
         .unwrap_or_else(|error| panic!("expected one JSON report ({error}): {stdout}"));
     assert_eq!(report["ok"], true);
     assert_eq!(report["minimum_version"], "0.159.2");
-    assert_eq!(report["aligned_version"], "0.161.0");
+    assert_eq!(report["aligned_version"], "0.162.1");
     assert_eq!(report["path_cli"]["status"], "supported_older");
     let note = report["path_cli"]["note"].as_str().unwrap();
     assert!(
@@ -2436,6 +2491,136 @@ fn doctor_unknown_version_is_a_single_json_report_with_failure_exit() {
             .contains("exited with 7")
     );
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    let _ = fs::remove_dir_all(home);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn launch_uses_discovered_desktop_engine_when_path_has_no_codex() {
+    let home = temp_home("launch-discovered-desktop-runtime");
+    let (fake_bin, log) = install_fake_codex(&home);
+    install_fake_desktop_codex(&home, &fake_bin);
+    setup_chatgpt(&home);
+
+    let output = run(
+        &home,
+        &PathBuf::from("/definitely/no-codex"),
+        &log,
+        &["launch", "work", "hello"],
+    );
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        recorded_runtimes(&log)
+            .iter()
+            .any(|runtime| runtime.as_deref() == Some("desktop")),
+        "desktop executable was not selected: {:?}",
+        recorded_runtimes(&log)
+    );
+    let _ = fs::remove_dir_all(home);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn explicit_codex_runtime_override_beats_path_cli() {
+    let home = temp_home("launch-explicit-desktop-runtime");
+    let (fake_bin, log) = install_fake_codex(&home);
+    let desktop = install_fake_desktop_codex(&home, &fake_bin);
+    setup_chatgpt(&home);
+
+    let output = run_env(
+        &home,
+        &fake_bin,
+        &log,
+        &["launch", "work", "hello"],
+        &[("CODEX_SWITCH_CODEX", desktop.to_str().unwrap())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        recorded_runtimes(&log)
+            .iter()
+            .any(|runtime| runtime.as_deref() == Some("desktop")),
+        "explicit executable was not selected: {:?}",
+        recorded_runtimes(&log)
+    );
+    let _ = fs::remove_dir_all(home);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn doctor_accepts_a_discovered_desktop_engine_without_a_path_cli() {
+    let home = temp_home("doctor-desktop-only");
+    let (fake_bin, log) = install_fake_codex(&home);
+    let desktop = install_fake_desktop_codex(&home, &fake_bin);
+    let output = run(
+        &home,
+        &PathBuf::from("/definitely/no-codex"),
+        &log,
+        &["--json", "doctor"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["path_cli"]["status"], "not_found");
+    assert_eq!(
+        report["selected_runtime"]["executable"],
+        desktop.to_str().unwrap()
+    );
+    assert_eq!(report["launch_runtime_available"], true);
+    assert_eq!(report["core_account_commands_available"], true);
+    let _ = fs::remove_dir_all(home);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn desktop_daemon_manual_command_quotes_a_runtime_path_with_spaces() {
+    let home = temp_home("desktop runtime with spaces");
+    let (fake_bin, log) = install_fake_codex(&home);
+    let desktop = install_fake_desktop_codex(&home, &fake_bin);
+    setup_chatgpt(&home);
+    fs::write(
+        home.join(".codex-switch/config.toml"),
+        "[use]\nrestart_app_server = false\n",
+    )
+    .unwrap();
+    let output = run_env(
+        &home,
+        &PathBuf::from("/definitely/no-codex"),
+        &log,
+        &["use", "work"],
+        &[("CS_FAKE_CODEX_DAEMON", "running")],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let command = format!("{} app-server daemon restart", shell_quote(&desktop));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(&command),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        recorded_runtimes(&log)
+            .iter()
+            .all(|runtime| runtime.as_deref() == Some("desktop"))
+    );
+    assert_eq!(
+        daemon_argv(&log),
+        vec![vec!["app-server", "daemon", "version"]]
+    );
     let _ = fs::remove_dir_all(home);
 }
 

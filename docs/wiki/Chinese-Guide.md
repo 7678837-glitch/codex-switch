@@ -37,7 +37,7 @@ codex-switch tui
 
 ChatGPT 文件登录需要 `cli_auth_credentials_store = "file"`。登录、导入、切换及对应后端请求会预检有效的系统/MDM 认证策略；普通配置不能放宽管理员的登录方式、工作区或存储要求。存在 `OPENAI_FEDERATION_RULE_ID` 或 `OPENAI_IDENTITY_TOKEN_FILE`（即使为空）时，Codex 会优先选择工作负载身份联合认证，因此文件登录操作会被拒绝；工具不会删除这些变量或改写企业策略。codex-switch 自身发起的 ChatGPT 请求（用量、刷新、工作区元数据、预热、模型、重置卡）不支持自定义 `chatgpt_base_url`，会在请求前明确报错；`use`、`import`、`login`、`launch` 等纯本地命令不受其影响。API 提供方使用独立的密钥启动路径。管理员策略文件（系统 requirements、managed_config、MDM）无法读取、过大或格式错误时仍会明确报错（跳过会丢失强制策略）；未知的 `allowed_login_methods` 条目会被忽略并警告（若不剩任何已知方式，ChatGPT 登录仍被拒绝），未知的 `cli_auth_credentials_store` 值按“不是 `file`”处理；用户自己的 `config.toml` 无法读取、过大或不是合法 TOML 时仅警告并跳过。
 
-`codex-switch launch` 的项目支持基线是 Codex CLI 0.159.2 或更新版本。先用 `codex-switch doctor` 检查 PATH 中实际解析到的 CLI；这是本项目的支持基线，不表示旧版 Codex 一定无法独立工作。若 PATH CLI 低于基线，请按原安装方式升级；npm 安装的 CLI 在同一 Node.js/fnm 环境中运行 `npm install -g @openai/codex@latest`（与 TUI 和 `launch` 提示的命令一致），然后重启终端并用 `codex --version` 或 `codex-switch doctor` 验证。桌面版可能使用另一个引擎，可用 `codex-switch doctor --desktop-codex <桌面版内置引擎路径>` 单独检查，不会自动搜索桌面安装。Windows 下 WSL 默认使用独立 Linux home，不会自动共享 Windows Codex app 的配置、认证和会话；参见 OpenAI 的 [Windows app 与 WSL 说明](https://learn.chatgpt.com/docs/windows/windows-app)。
+`codex-switch launch` 的最低支持版本为 Codex `0.159.2`，当前对齐基线为 `0.162.1`。引擎按 `CODEX_SWITCH_CODEX`、PATH、已知 macOS 桌面安装的顺序选择；只装 ChatGPT 桌面版也可使用其内置引擎。显式路径无效时直接报错。`codex-switch doctor` 检查实际选择，`--desktop-codex <路径>` 额外检查指定引擎。`launch` 在终端启动引擎，不打开 GUI。ChatGPT 账号管理要求文件凭据，不支持 keyring、auto 或 ephemeral 存储；切换后重新连接已有桌面会话并核对账号。Windows 非标准安装可设置 `CODEX_SWITCH_CODEX`；WSL 默认使用独立 Linux home，不会自动共享 Windows 桌面版的配置、认证和会话。
 
 已有 `auth.json` 备份可导入：
 
@@ -63,7 +63,7 @@ codex-switch import ~/auth-backups
 - `use` 和 Accounts 页的 `u` 切换 ChatGPT 的 `$CODEX_HOME/auth.json`，并将用户 `config.toml` 顶层及其默认 `profile` 中已有的 `model_provider` 选择改回 `openai`；保留模型、提供方定义、MCP 和注释。**不能**用提供方别名执行 `use`。
 - 若另行启动仍请求第三方地址，检查启动参数、项目 `.codex/config.toml`、额外指定的 Codex profile，以及 `openai_base_url` / `OPENAI_BASE_URL` 地址覆盖；这些不由账号切换修改。
 - `use` 不会后台自动换号。Codex 0.157 起交互会话挂在共享的 app-server daemon 上，它只在启动时读一次 `auth.json`，所以 daemon 在运行时 `use` / `login` 会自动执行 `codex app-server daemon restart`（挂在上面的会话会重连到新账号，进行中的回合会被打断；每次 daemon 调用最多等 15 秒，超时按重启失败提示。不想被打断可在 `config.toml` 设 `[use] restart_app_server = false` 或在 TUI 设置页关闭，此时只提示手动命令）；`codex exec` 或 `--no-daemon` 的进程不会读取新的 `auth.json`，需重启 Codex，或用 `launch` 开新进程（Codex 的 `--help` 列出 `--no-daemon` 时，ChatGPT 的 launch 会自动加上；已带 `--no-daemon`、`--remote` 或 `agents` 的参数原样传递；这次 `--help` 探测最多等 10 秒，若无法判断路由，launch 会在写入任何凭据之前直接拒绝）。判断 `auth.json` 是否变化时比较的是规范化后的 JSON，仅格式变化（例如 Codex 自己刷新 Token 后重写文件）或重新选中已在用的账号都不会重启 daemon；Windows 上目录 ACL 已经是加固状态时不再重复写入，所以切换很快。
-- `launch` 会先对同一个已解析的 PATH Codex CLI 执行最低版本检查；明确读到低于 0.159.2 的版本会在选择账号、消耗重置卡、创建 provider run 或写入凭据前拒绝启动（0.159.2 的 prerelease，如 `0.159.2-rc.1`，视为满足）；版本未知或探测失败（超时、报错、无法解析）只在 stderr 给出警告并继续启动。10 秒版本探测使用临时 `CODEX_HOME`；原有 `codex --help` 能力探测仍单独保留。版本 0.159.2 是本项目支持基线，不是断言更旧 Codex 无法独立工作。
+- `launch` 会先对同一个已选定的 Codex 引擎 执行最低版本检查；明确读到低于 0.159.2 的版本会在选择账号、消耗重置卡、创建 provider run 或写入凭据前拒绝启动（0.159.2 的 prerelease，如 `0.159.2-rc.1`，视为满足）；版本未知或探测失败（超时、报错、无法解析）只在 stderr 给出警告并继续启动。10 秒版本探测使用临时 `CODEX_HOME`；原有 `codex --help` 能力探测仍单独保留。版本 0.159.2 是本项目支持基线，不是断言更旧 Codex 无法独立工作。
 - Codex 参数写在 `--` 后面：`codex-switch launch work -- exec --json "…"`。`exec` / `resume` 等 Codex 子命令也可以直接跟在 `launch` 后面，不必再写 `--`。`--` 两侧的参数都会保留。prompt 看起来像别名时仍须 `--`。
 - 当前 Codex 没有 `--full-auto`；用 `-a never`、`--sandbox` 或 `--dangerously-bypass-approvals-and-sandbox`。
 - 池子耗尽时，交互式 `use` / `launch` 可提示消耗重置卡；脚本须显式加 `--consume-card`。
@@ -76,14 +76,14 @@ codex-switch import ~/auth-backups
 
 ## 自定义 API 提供方（Beta）
 
-检查 PATH CLI 以及可选的桌面内置引擎：
+检查所选引擎以及可选的指定桌面引擎：
 
 ```bash
 codex-switch doctor
 codex-switch doctor --desktop-codex <桌面版内置引擎路径>
 ```
 
-最低支持版本为 `0.159.2`，当前对齐基线为 `0.161.0`。未提供桌面路径会报告 `not_checked`，不会失败。未知或低于最低版本会失败并输出诊断；达到最低要求但低于对齐基线的版本标为 `supported_older`，仍可使用。两个引擎都达到最低版本但 core/prerelease 版本不同时，只报告差异，build metadata 差异不算版本不匹配。超过对齐基线的版本标为 `above_baseline_unverified`。本地自行构建的 Codex（版本为 `0.0.0` 或带 `-dev` / `-local` 后缀）标为 `dev_build`：不与最低版本比较、不显示升级警告、不阻止 `launch`，HTTP 请求的 `client_version` 使用 `0.161.0` 基线。`doctor` 只检查可执行文件版本，不检查认证、系统/managed policy、桌面 UI 或 daemon 兼容性；版本差异不代表这些路径已验证。`--json doctor` 提供结构化结果；详见英文 [Command reference](Command-Reference)。
+最低支持版本为 `0.159.2`，当前对齐基线为 `0.162.1`。未提供额外桌面路径时，`desktop_codex` 报告 `not_checked`；实际选用的引擎单独见 `selected_runtime`。仅安装桌面应用时，只要发现的引擎健康，缺少 PATH CLI 不会导致失败。完全没有引擎时，`doctor` 会区分账号功能仍可用和 `launch` 缺少引擎。未知或低于最低版本会失败并输出诊断；达到最低要求但低于对齐基线的版本标为 `supported_older`，仍可使用。两个引擎都达到最低版本但 core/prerelease 版本不同时，只报告差异，build metadata 差异不算版本不匹配。超过对齐基线的版本标为 `above_baseline_unverified`。本地自行构建的 Codex（版本为 `0.0.0` 或带 `-dev` / `-local` 后缀）标为 `dev_build`：不与最低版本比较、不显示升级警告、不阻止 `launch`，HTTP 请求的 `client_version` 使用 `0.162.1` 基线。`doctor` 只检查可执行文件版本，不检查认证、系统/managed policy、桌面 UI 或 daemon 兼容性；版本差异不代表这些路径已验证。`--json doctor` 提供结构化结果；详见英文 [Command reference](Command-Reference)。
 
 一个提供方 = **一个 Responses-compatible 端点 URL + 一把 API 密钥 + 多个模型**。可获取网关模型目录并启动 Codex。兼容性取决于网关和具体模型；提供方没有 ChatGPT 额度视图，也不参与自动选号。别名（Alias）是唯一对用户可见的名称；思考等级（reasoning）与 `web_search` 按**模型**保存，不是按整个提供方。
 
@@ -237,7 +237,7 @@ Codex 在前台运行；退出后回到 TUI。
 
 ### 提供方的原生 Codex 环境
 
-提供方启动按 Codex `0.161.0` 的模型契约验证，最低支持版本仍为 `0.159.2`（见仓库 `docs/CODEX-ALIGNMENT.md`）。每次启动在 `$CODEX_HOME` 创建 `cs-*.config.toml`，只保存本次提供方的差异配置；密钥仅通过子进程环境变量传入。公共资源与周边服务认证继续由 Codex 原生机制管理。Codex 内保存的设置属于当前 profile，恢复该会话时继续使用；公共配置的后续更新仍会被继承，除非该 profile 已覆盖相同设置。不要另行传入 `--profile` / `-p`。
+提供方启动按 Codex `0.162.1` 的模型契约验证，最低支持版本仍为 `0.159.2`（见仓库 `docs/CODEX-ALIGNMENT.md`）。每次启动在 `$CODEX_HOME` 创建 `cs-*.config.toml`，只保存本次提供方的差异配置；密钥仅通过子进程环境变量传入。公共资源与周边服务认证继续由 Codex 原生机制管理。Codex 内保存的设置属于当前 profile，恢复该会话时继续使用；公共配置的后续更新仍会被继承，除非该 profile 已覆盖相同设置。不要另行传入 `--profile` / `-p`。
 
 运行元数据与模型目录保存在 `$CODEX_SWITCH_HOME/provider-runs/`，会话保存在默认 Codex home。提供方重命名不会改变历史归属，删除后同名重建不会接管旧会话。已有旧版隔离目录的历史仍按旧路径恢复，尚未迁移为共享资源环境。
 

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 mod api;
 mod credits;
+mod metadata;
 mod parse;
 mod reset_credits;
 mod scoring;
@@ -73,6 +74,22 @@ pub struct ResetCredit {
     pub expires_at: Option<String>,
 }
 
+/// Daybreak programmes reported by the authenticated Codex model catalogue.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DaybreakAccess {
+    pub blue: bool,
+    pub red: bool,
+}
+
+/// Subscription expiry metadata, sourced from the live subscription endpoint
+/// or an ID-token snapshot when the endpoint is unavailable.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubscriptionInfo {
+    pub active_until: String,
+    pub source: String,
+    pub checked_at: Option<i64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConsumedResetCredit {
     pub credit: ResetCredit,
@@ -101,6 +118,10 @@ pub struct UsageInfo {
     pub individual_limit: Option<Box<SpendControlLimit>>,
     /// Per-feature rate limits from `additional_rate_limits[]` (e.g. codex_other).
     pub additional_limits: Vec<AdditionalRateLimit>,
+    pub daybreak: Option<DaybreakAccess>,
+    pub daybreak_error: Option<String>,
+    pub subscription: Option<SubscriptionInfo>,
+    pub subscription_error: Option<String>,
 }
 
 /// One assembled display row for an additional-limit pool. Pure data,

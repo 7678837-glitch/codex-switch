@@ -7,7 +7,9 @@ use chrono::{DateTime, Local, TimeZone, Utc};
 use serde::Serialize;
 
 use crate::jwt::AccountInfo;
-use crate::usage::{AdditionalRateLimit, ResetCredit, UsageInfo, WindowUsage};
+use crate::usage::{
+    AdditionalRateLimit, DaybreakAccess, ResetCredit, SubscriptionInfo, UsageInfo, WindowUsage,
+};
 
 /// Marker error: the command already printed a user-facing failure message.
 #[derive(Debug)]
@@ -69,6 +71,20 @@ pub struct JsonResetCredit {
 }
 
 #[derive(Serialize)]
+pub struct JsonDaybreakAccess {
+    pub blue: bool,
+    pub red: bool,
+}
+
+#[derive(Serialize)]
+pub struct JsonSubscriptionInfo {
+    pub active_until: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<i64>,
+}
+
+#[derive(Serialize)]
 #[serde(untagged)]
 pub enum JsonUsage {
     Ok {
@@ -85,6 +101,14 @@ pub enum JsonUsage {
         reset_credits: Vec<JsonResetCredit>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reset_credits_error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        daybreak: Option<JsonDaybreakAccess>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        daybreak_error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subscription: Option<Box<JsonSubscriptionInfo>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subscription_error: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         additional_limits: Vec<JsonAdditionalLimit>,
     },
@@ -208,6 +232,21 @@ fn reset_credit_to_json(credit: &ResetCredit) -> JsonResetCredit {
     }
 }
 
+fn daybreak_to_json(access: &DaybreakAccess) -> JsonDaybreakAccess {
+    JsonDaybreakAccess {
+        blue: access.blue,
+        red: access.red,
+    }
+}
+
+fn subscription_to_json(subscription: &SubscriptionInfo) -> JsonSubscriptionInfo {
+    JsonSubscriptionInfo {
+        active_until: subscription.active_until.clone(),
+        source: subscription.source.clone(),
+        checked_at: subscription.checked_at,
+    }
+}
+
 fn additional_limit_to_json(l: &AdditionalRateLimit) -> JsonAdditionalLimit {
     JsonAdditionalLimit {
         limit_name: l.limit_name.clone(),
@@ -250,6 +289,13 @@ pub fn usage_to_json(result: Result<&UsageInfo, &str>) -> JsonUsage {
                 reset_credits_available_count: u.reset_credits_available_count,
                 reset_credits: u.reset_credits.iter().map(reset_credit_to_json).collect(),
                 reset_credits_error: u.reset_credits_error.clone(),
+                daybreak: u.daybreak.as_ref().map(daybreak_to_json),
+                daybreak_error: u.daybreak_error.clone(),
+                subscription: u
+                    .subscription
+                    .as_ref()
+                    .map(|value| Box::new(subscription_to_json(value))),
+                subscription_error: u.subscription_error.clone(),
                 additional_limits: u
                     .additional_limits
                     .iter()
@@ -607,6 +653,45 @@ mod tests {
         assert_eq!(
             json.pointer("/reset_credits/0/expires_at"),
             Some(&Value::Null)
+        );
+    }
+
+    #[test]
+    fn json_usage_preserves_daybreak_and_subscription_metadata_without_turning_errors_into_usage_errors()
+     {
+        let usage = UsageInfo {
+            daybreak: Some(DaybreakAccess {
+                blue: true,
+                red: false,
+            }),
+            daybreak_error: Some("partial_catalog".into()),
+            subscription: Some(SubscriptionInfo {
+                active_until: "2026-11-14T02:40:00Z".into(),
+                source: "token".into(),
+                checked_at: Some(1_783_857_600),
+            }),
+            subscription_error: Some("subscription_unavailable".into()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(usage_to_json(Ok(&usage))).unwrap();
+        assert_eq!(json.pointer("/daybreak/blue"), Some(&Value::Bool(true)));
+        assert_eq!(json.pointer("/daybreak/red"), Some(&Value::Bool(false)));
+        assert_eq!(
+            json.pointer("/daybreak_error"),
+            Some(&Value::String("partial_catalog".into()))
+        );
+        assert_eq!(
+            json.pointer("/subscription/source"),
+            Some(&Value::String("token".into()))
+        );
+        assert_eq!(
+            json.pointer("/subscription/checked_at"),
+            Some(&Value::Number(1_783_857_600.into()))
+        );
+        assert!(
+            json.get("error").is_none(),
+            "metadata errors keep usage successful"
         );
     }
 

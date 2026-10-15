@@ -162,7 +162,7 @@ pub struct Cli {
 pub enum Commands {
     /// Switch to a profile; omit alias to auto-select using the unified scoring algorithm
     #[command(
-        after_help = "`use` switches ChatGPT profiles only. Start a custom API provider with `codex-switch launch <alias>`.\n\nWhen the live auth.json actually changes and a Codex app-server daemon (Codex 0.157+) is running, `codex app-server daemon restart` is run (bounded to 15 seconds) so new sessions use the selected account; a failed restart is a warning, not a failed switch. `login` (when it activates credentials) and the TUI `u` switch do the same.\nSet `[use] restart_app_server = false` in config.toml (or in TUI Settings) to leave the daemon alone; the note then shows the manual command."
+        after_help = "`use` switches ChatGPT profiles only. Start a custom API provider with `codex-switch launch <alias>`.\n\nWhen the live auth.json actually changes and a Codex app-server daemon (Codex 0.157+) is running, the selected Codex engine runs `app-server daemon restart` (bounded to 15 seconds) so new sessions use the selected account; a failed restart is a warning, not a failed switch. `login` (when it activates credentials) and the TUI `u` switch do the same.\nSet `[use] restart_app_server = false` in config.toml (or in TUI Settings) to leave the daemon alone; the note then shows the manual command."
     )]
     Use {
         /// Profile alias (omit to auto-select)
@@ -241,7 +241,7 @@ pub enum Commands {
     },
     /// Report Codex executable versions and minimum-version compatibility
     #[command(
-        after_help = "`--desktop-codex` must point directly to the bundled Codex engine executable; the desktop app's marketing version is not an engine version. This command never searches private desktop application data. Versions newer than the aligned baseline pass the minimum check but are reported as unverified. Matching versions indicate an aligned core only; CLI and desktop capabilities and app-server/daemon behavior can differ."
+        after_help = "Runtime selection: CODEX_SWITCH_CODEX, then PATH, then known macOS desktop bundles. Account commands work without an engine; only launch needs one. `--desktop-codex` must point directly to the bundled Codex engine executable; the desktop app's marketing version is not an engine version. This command never searches private desktop application data. Versions newer than the aligned baseline pass the minimum check but are reported as unverified. Matching versions indicate an aligned core only; CLI and desktop capabilities and app-server/daemon behavior can differ."
     )]
     Doctor {
         /// Explicit Codex engine executable bundled with a desktop installation

@@ -191,6 +191,57 @@ pub(crate) fn print_usage_line(u: &usage::UsageInfo) {
     for line in crate::output::reset_credits_detail_lines(u, 4) {
         println!("  {}", color::dim(&line));
     }
+    if let Some(daybreak) = &u.daybreak {
+        let incomplete = u.daybreak_error.is_some();
+        let blue = if daybreak.blue {
+            "available"
+        } else if incomplete {
+            "unknown"
+        } else {
+            "not available"
+        };
+        let red = if daybreak.red {
+            "available"
+        } else if incomplete {
+            "unknown"
+        } else {
+            "not available"
+        };
+        println!("  daybreak: Blue {blue}; Red {red}");
+    }
+    if let Some(error) = &u.daybreak_error {
+        let detail = if error == "partial_catalog" {
+            "catalogue incomplete; unlisted access is unknown".to_string()
+        } else {
+            error.clone()
+        };
+        println!("  {}", color::warn(&format!("daybreak status: {detail}")));
+    }
+    if let Some(subscription) = &u.subscription {
+        println!(
+            "  subscription valid until: {}",
+            crate::output::format_local_datetime(&subscription.active_until)
+        );
+        if subscription.source == "token" {
+            let checked = subscription
+                .checked_at
+                .map(crate::output::format_local_timestamp)
+                .map(|value| format!("; checked {value}"))
+                .unwrap_or_default();
+            println!(
+                "  {}",
+                color::dim(&format!("subscription source: token snapshot{checked}"))
+            );
+        } else {
+            println!("  {}", color::dim("subscription source: live query"));
+        }
+    }
+    if let Some(error) = &u.subscription_error {
+        println!(
+            "  {}",
+            color::warn(&format!("subscription status: {error}"))
+        );
+    }
 }
 
 #[cfg(test)]

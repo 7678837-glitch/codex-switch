@@ -952,6 +952,14 @@ async fn fetch_usage_retried_inner(
 
         match outcome.result {
             Ok(mut usage) => {
+                super::metadata::enrich_usage_metadata(
+                    &mut usage,
+                    &at,
+                    id_token.as_deref(),
+                    account_id.as_deref(),
+                    is_fedramp,
+                )
+                .await;
                 let cache_get_started = Instant::now();
                 let cached = crate::cache::get_async(alias).await;
                 log_local_phase(

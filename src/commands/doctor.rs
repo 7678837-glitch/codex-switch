@@ -23,7 +23,27 @@ fn print_human_report(report: &DoctorReport) {
     println!("Codex minimum version: {}", report.minimum_version);
     println!("Currently aligned version: {}", report.aligned_version);
     println!("Note: {}", report.runtime_note);
+    println!(
+        "Core account commands: {}",
+        if report.core_account_commands_available {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
+    println!(
+        "Launch runtime: {}",
+        if report.launch_runtime_available {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
     print_report("PATH CLI", &report.path_cli);
+    print_report("Selected launch runtime", &report.selected_runtime);
+    if let Some(source) = &report.selected_runtime_source {
+        println!("  selected from: {source}");
+    }
     print_report("Desktop engine", &report.desktop_codex);
     if let Some(matches) = report.versions_match {
         println!("  CLI and desktop engine versions match: {matches}");

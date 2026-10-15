@@ -215,6 +215,32 @@ fn decode_jwt_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&decoded).ok()
 }
 
+/// Read the subscription snapshot embedded in an ID token. This is only a
+/// fallback for a failed live lookup; an expired token can still describe the
+/// last subscription state and does not establish whether the account works.
+pub(crate) fn subscription_snapshot_from_id_token(
+    token: Option<&str>,
+) -> Option<(String, Option<i64>)> {
+    let claims = decode_jwt_payload(token?)?;
+    let auth = claims.get("https://api.openai.com/auth")?;
+    let active_until = auth
+        .get("chatgpt_subscription_active_until")
+        .and_then(Value::as_str)
+        .filter(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())?
+        .to_string();
+    let checked_at = auth
+        .get("chatgpt_subscription_last_checked")
+        .and_then(|value| {
+            value.as_i64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+                    .map(|date| date.timestamp())
+            })
+        });
+    Some((active_until, checked_at))
+}
+
 /// Return the `exp` claim (unix timestamp) from a JWT, or `None` if missing.
 pub fn token_expires_at(token: &str) -> Option<i64> {
     let payload = decode_jwt_payload(token)?;

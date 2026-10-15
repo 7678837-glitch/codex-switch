@@ -399,6 +399,10 @@ mod tests {
             rate_limit_reached_type: None,
             individual_limit: None,
             additional_limits: vec![],
+            daybreak: None,
+            daybreak_error: None,
+            subscription: None,
+            subscription_error: None,
         }
     }
 

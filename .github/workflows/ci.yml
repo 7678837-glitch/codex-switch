@@ -51,7 +51,7 @@ jobs:
         run: cargo fmt --check
       # Prebuilt binary instead of compiling cargo-audit on every run.
       - name: Install cargo-audit
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-audit
       - name: Audit dependencies
@@ -149,8 +149,8 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         env:
-          CODEX_ENGINE_URL: https://github.com/openai/codex/releases/download/rust-v0.161.0/codex-x86_64-unknown-linux-musl.tar.gz
-          CODEX_ENGINE_SHA256: b1efb95097660d7f2e5a3887618a23f2ea1b0d548078bf92b0f7a5d229a0cef2
+          CODEX_ENGINE_URL: https://github.com/openai/codex/releases/download/rust-v0.162.1/codex-x86_64-unknown-linux-musl.tar.gz
+          CODEX_ENGINE_SHA256: 86f268d81b898f3e144c5ecff2ad2fda2c5802e042d6195b72538fe0fa125057
         run: |
           archive="$RUNNER_TEMP/codex-x86_64-unknown-linux-musl.tar.gz"
           engine_dir="$RUNNER_TEMP/codex-engine"

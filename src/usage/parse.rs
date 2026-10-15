@@ -264,6 +264,10 @@ pub fn parse_usage(body: &Value) -> UsageInfo {
         rate_limit_reached_type,
         individual_limit,
         additional_limits,
+        daybreak: None,
+        daybreak_error: None,
+        subscription: None,
+        subscription_error: None,
     }
 }
 

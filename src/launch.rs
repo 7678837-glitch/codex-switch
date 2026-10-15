@@ -136,12 +136,13 @@ async fn launch_interactive(
     // Resolve and validate the exact executable once, before profile selection
     // can consume a reset card or provider launch can create a native run.
     let codex_command = ensure_codex_available()?;
+    let runtime_source = crate::codex_runtime::resolve()?.source;
     // The probe spawns `codex --version` and can wait up to its timeout, so
     // keep it off the async worker (and the TUI event loop that awaits this).
     {
         let probe_path = codex_command.clone();
         tokio::task::spawn_blocking(move || {
-            crate::codex_compat::ensure_launch_version(&probe_path)
+            crate::codex_compat::ensure_launch_version_for_source(&probe_path, runtime_source)
         })
         .await
         .context("Codex version probe task failed")??;
@@ -810,13 +811,10 @@ fn join_codex_pipes(pipes: CodexPipes) -> CapturedCodexIo {
     }
 }
 
-/// Resolve the Codex command on PATH without running it: `codex --version`
-/// writes PATH-alias helpers into `$CODEX_HOME/tmp`. The concrete path is
-/// passed to the later spawn so preflight and execution use the same candidate.
+/// Resolve one concrete runtime before any launch side effects. This may be a
+/// PATH CLI, an explicit override, or a supported desktop bundle.
 fn ensure_codex_available() -> Result<std::path::PathBuf> {
-    command_on_path("codex").ok_or_else(|| {
-        anyhow::anyhow!("codex not found in PATH. Install: npm install -g @openai/codex")
-    })
+    Ok(crate::codex_runtime::resolve()?.executable)
 }
 
 pub(crate) fn command_on_path(name: &str) -> Option<std::path::PathBuf> {
@@ -1786,8 +1784,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn terminating_a_launch_reaps_the_child_before_returning() {
-        let mut child = std::process::Command::new("sh")
-            .args(["-c", "sleep 30"])
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
             .spawn()
             .expect("spawn child");
 
@@ -1872,10 +1870,12 @@ mod tests {
         }
 
         let previous = std::env::var_os("PATH");
+        let previous_override = std::env::var_os("CODEX_SWITCH_CODEX");
         unsafe {
             std::env::set_var("PATH", dir.path());
+            std::env::remove_var("CODEX_SWITCH_CODEX");
         }
-        struct Restore(Option<std::ffi::OsString>);
+        struct Restore(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
         impl Drop for Restore {
             fn drop(&mut self) {
                 unsafe {
@@ -1883,24 +1883,30 @@ mod tests {
                         Some(value) => std::env::set_var("PATH", value),
                         None => std::env::remove_var("PATH"),
                     }
+                    match &self.1 {
+                        Some(value) => std::env::set_var("CODEX_SWITCH_CODEX", value),
+                        None => std::env::remove_var("CODEX_SWITCH_CODEX"),
+                    }
                 }
             }
         }
-        let _restore = Restore(previous);
+        let _restore = Restore(previous, previous_override);
         ensure_codex_available().expect("a PATH file named codex is enough; do not run it");
     }
 
     #[test]
-    fn ensure_codex_available_fails_when_codex_is_not_on_path() {
+    fn ensure_codex_available_rejects_an_invalid_explicit_runtime() {
         let _lock = crate::profile::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let empty = tempfile::tempdir().unwrap();
         let previous = std::env::var_os("PATH");
+        let previous_override = std::env::var_os("CODEX_SWITCH_CODEX");
         unsafe {
             std::env::set_var("PATH", empty.path());
+            std::env::set_var("CODEX_SWITCH_CODEX", empty.path().join("missing-codex"));
         }
-        struct Restore(Option<std::ffi::OsString>);
+        struct Restore(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
         impl Drop for Restore {
             fn drop(&mut self) {
                 unsafe {
@@ -1908,13 +1914,17 @@ mod tests {
                         Some(value) => std::env::set_var("PATH", value),
                         None => std::env::remove_var("PATH"),
                     }
+                    match &self.1 {
+                        Some(value) => std::env::set_var("CODEX_SWITCH_CODEX", value),
+                        None => std::env::remove_var("CODEX_SWITCH_CODEX"),
+                    }
                 }
             }
         }
-        let _restore = Restore(previous);
+        let _restore = Restore(previous, previous_override);
         let err = ensure_codex_available().unwrap_err().to_string();
         assert!(
-            err.contains("codex not found in PATH"),
+            err.contains("CODEX_SWITCH_CODEX must name an executable"),
             "unexpected error: {err}"
         );
     }

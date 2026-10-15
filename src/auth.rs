@@ -31,7 +31,7 @@ pub(crate) fn codex_cli_version() -> &'static str {
         .as_str()
 }
 
-/// The actual PATH probe shared by HTTP headers/query parameters and the TUI
+/// The selected runtime probe shared by HTTP headers/query parameters and the TUI
 /// compatibility notice. Unlike the request fallback below, this preserves
 /// missing/unparseable CLI information instead of claiming the aligned version.
 pub(crate) fn codex_cli_version_report() -> crate::codex_compat::VersionReport {
@@ -41,16 +41,17 @@ pub(crate) fn codex_cli_version_report() -> crate::codex_compat::VersionReport {
 }
 
 fn detect_codex_cli_version_report() -> crate::codex_compat::VersionReport {
-    match crate::launch::command_on_path("codex") {
-        Some(path) => {
-            crate::codex_compat::probe_executable_with_timeout(&path, CODEX_VERSION_PROBE_TIMEOUT)
-                .report()
-        }
-        None => crate::codex_compat::VersionReport {
+    match crate::codex_runtime::resolve() {
+        Ok(runtime) => crate::codex_compat::probe_executable_with_timeout(
+            &runtime.executable,
+            CODEX_VERSION_PROBE_TIMEOUT,
+        )
+        .report(),
+        Err(error) => crate::codex_compat::VersionReport {
             executable: None,
             version: None,
             status: crate::codex_compat::CompatibilityStatus::NotFound,
-            note: Some("codex was not found on PATH".to_string()),
+            note: Some(error.to_string()),
         },
     }
 }
@@ -69,7 +70,7 @@ fn client_version_from_report(report: crate::codex_compat::VersionReport) -> Str
         .unwrap_or_else(|| ALIGNED_CODEX_VERSION.to_string())
 }
 
-/// Run the first (blocking) PATH probe on the blocking pool so no async worker
+/// Run the first (blocking) runtime probe on the blocking pool so no async worker
 /// stalls on it. Later calls are free once the value is cached.
 pub(crate) async fn warm_codex_cli_version() {
     if CODEX_CLI_VERSION.get().is_some() {
@@ -1144,7 +1145,7 @@ mod tests {
     fn user_agent_uses_the_same_aligned_version_as_model_requests() {
         let version = codex_cli_version();
         assert!(codex_user_agent().starts_with(&format!("codex_cli_rs/{version} ")));
-        assert_eq!(ALIGNED_CODEX_VERSION, "0.161.0");
+        assert_eq!(ALIGNED_CODEX_VERSION, "0.162.1");
     }
 
     #[test]

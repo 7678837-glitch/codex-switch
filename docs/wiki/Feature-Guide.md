@@ -1,6 +1,8 @@
 # Feature guide
 
-`codex-switch` manages multiple file-backed Codex CLI logins, observes their quota state, and selects an account for the next Codex process.
+`codex-switch` manages multiple file-backed Codex logins for CLI and desktop environments, observes their quota state, and selects an account for the next Codex process.
+
+On macOS, a separate CLI installation is optional: when no `codex` is on PATH, the tool discovers ChatGPT/Codex engines in the user's and system Applications folders. `CODEX_SWITCH_CODEX` explicitly selects an executable on any platform and takes precedence over PATH. An invalid explicit path is an error. `launch` starts the selected engine in the terminal; it does not open or restart the desktop GUI. Account operations require file-backed OAuth credentials; keyring, auto and ephemeral stores remain unsupported. Reconnect existing desktop sessions after switching and confirm their active account.
 
 > **Authentication prerequisite:** Codex must use the file credential store. Set `cli_auth_credentials_store = "file"` in `$CODEX_HOME/config.toml`. Explicit `keyring`, `auto`, and `ephemeral` stores are rejected because they can bypass the `auth.json` file that codex-switch switches.
 
@@ -48,6 +50,8 @@ Normal reads refresh only stale entries. Use `list -f` or the TUI refresh action
 The TUI has four tabs: **Accounts** (ChatGPT OAuth, quota, scoring), **Providers (Beta)** (custom API endpoints), **Settings** (`config.toml`), and **Logs** (bounded `INFO` session diagnostics). `Tab` / `Shift+Tab` cycles them. Mouse users can click tabs, Accounts/Providers rows, Settings fields, provider add/edit form fields, launch-picker rows, confirmation `y`/`n`, and the visible footer actions. Double-click a row to open its account or provider launch menu; double-click a launch-picker model to start Codex. Use the wheel in Logs, Help, menus, Settings, and modal lists. Click outside a dismissible popup to close it; modal forms do not click through to the page behind them. `q` and `h` apply on the main view; forms, text edits, menus, and confirmations keep their own `Esc` and confirmation rules. `o` launches Codex on Accounts and Providers. On Accounts, `u` (when no accounts are marked) switches the selected account and shows `Switching to …` progress, `t` toggles session-only auto-refresh, and the account menu's `w` performs a one-time warmup. Settings uses `j`/`k` for fields and `s` to save; `s` on Accounts still cycles sort. Unsaved Settings edits survive leaving the tab and require confirmation before quitting; while a field is being edited, `Tab` stays on Settings.
 
 The TUI account detail page is a single scrollable column with identity and organization labels, token expiry times in the local timezone, every quota pool with a pace marker, available reset cards, and the models the account may use. Model names and reasoning-effort capabilities are discovered from the authenticated service at runtime, not hardcoded. The full shortcut list is in the [command reference](Command-Reference#tui-shortcuts) and under `h` inside the TUI.
+
+Quota refresh also reads each account's model access programs and subscription expiry. If any account advertises Daybreak Blue or Red, the account table shows a Daybreak column with independent blue/red sun symbols; `?` means unknown and `--` means the catalog explicitly advertises no Daybreak access. These indicate catalog eligibility, not whether Daybreak is enabled. Subscription expiry is shown in details using the local timezone. Live subscription data takes precedence over a labeled JWT snapshot with its original check time; an expiry date does not promise automatic renewal. Metadata failures remain visible without blocking quota display.
 
 ## Select an account
 

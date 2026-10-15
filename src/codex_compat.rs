@@ -7,7 +7,7 @@ use semver::Version;
 use serde::Serialize;
 
 pub(crate) const MINIMUM_CODEX_VERSION: &str = "0.159.2";
-pub(crate) const ALIGNED_CODEX_VERSION: &str = "0.161.0";
+pub(crate) const ALIGNED_CODEX_VERSION: &str = "0.162.1";
 pub(crate) const CLI_UPGRADE_NPM_COMMAND: &str = "npm install -g @openai/codex@latest";
 /// A cold Windows `codex.cmd` start (Node + fnm shim) can take several seconds;
 /// match the 10 s budget of the app-server help probe.
@@ -42,10 +42,14 @@ pub(crate) struct VersionReport {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DoctorReport {
     pub ok: bool,
+    pub core_account_commands_available: bool,
+    pub launch_runtime_available: bool,
     pub minimum_version: &'static str,
     pub aligned_version: &'static str,
     pub runtime_note: &'static str,
     pub path_cli: VersionReport,
+    pub selected_runtime: VersionReport,
+    pub selected_runtime_source: Option<String>,
     pub desktop_codex: VersionReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub versions_match: Option<bool>,
@@ -274,14 +278,38 @@ pub(crate) fn doctor_report(desktop_path: Option<&Path>) -> DoctorReport {
                 | CompatibilityStatus::DevBuild
         )
     };
-    let ok = healthy(&path_cli)
+    let (mut selected_runtime, selected_runtime_source) = match crate::codex_runtime::resolve() {
+        Ok(runtime) => (
+            probe_executable(&runtime.executable).report(),
+            Some(runtime.source.as_str().to_string()),
+        ),
+        Err(error) => (
+            VersionReport {
+                executable: None,
+                version: None,
+                status: CompatibilityStatus::NotFound,
+                note: Some(error.to_string()),
+            },
+            None,
+        ),
+    };
+    set_below_minimum_note(
+        &mut selected_runtime,
+        "Select a Codex runtime at or above the minimum version before launching.".to_string(),
+    );
+    let launch_runtime_available = healthy(&selected_runtime);
+    let ok = launch_runtime_available
         && (desktop_codex.status == CompatibilityStatus::NotChecked || healthy(&desktop_codex));
     DoctorReport {
         ok,
+        core_account_commands_available: true,
+        launch_runtime_available,
         minimum_version: MINIMUM_CODEX_VERSION,
         aligned_version: ALIGNED_CODEX_VERSION,
         runtime_note: "Matching engine versions indicate an aligned core; CLI and desktop can still expose different capabilities and use different app-server or daemon behavior.",
         path_cli,
+        selected_runtime,
+        selected_runtime_source,
         desktop_codex,
         versions_match,
         version_relation,
@@ -322,6 +350,22 @@ pub(crate) fn ensure_launch_version(path: &Path) -> Result<()> {
         }
         _ => unreachable!("a version that meets the minimum was already accepted"),
     }
+}
+
+pub(crate) fn ensure_launch_version_for_source(
+    path: &Path,
+    source: crate::codex_runtime::RuntimeSource,
+) -> Result<()> {
+    if source == crate::codex_runtime::RuntimeSource::Desktop {
+        let report = probe_executable(path).report();
+        if report.status == CompatibilityStatus::BelowMinimum {
+            anyhow::bail!(
+                "Bundled Codex desktop engine at '{}' is below the required version {MINIMUM_CODEX_VERSION}. Update the desktop application or select another runtime with CODEX_SWITCH_CODEX.",
+                path.display()
+            );
+        }
+    }
+    ensure_launch_version(path)
 }
 
 fn set_below_minimum_note(report: &mut VersionReport, note: String) {
@@ -447,7 +491,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let aligned = executable(dir.path(), "aligned-codex", "echo 0.161.0");
+        let aligned = executable(dir.path(), "aligned-codex", "echo 0.162.1");
         let aligned_report = probe_executable(&aligned).report();
         assert_eq!(
             serde_json::to_value(aligned_report.status).unwrap(),

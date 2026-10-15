@@ -1,6 +1,6 @@
 # codex-switch
 
-**A multi-account manager for [OpenAI Codex CLI](https://github.com/openai/codex).** Save local Codex logins, monitor quota, and select the best account before the next session.
+**A multi-account manager for [OpenAI Codex](https://github.com/openai/codex), including file-backed desktop logins.** Save local Codex logins, monitor quota, and select the best account before the next session.
 
 [中文说明](README_CN.md) · [**Documentation (Wiki)**](https://github.com/xjoker/codex-switch/wiki) · [Releases](https://github.com/xjoker/codex-switch/releases)
 
@@ -39,7 +39,9 @@ codex-switch use          # switch to the best eligible account
 codex-switch launch       # start Codex with the best account
 ```
 
-`codex-switch launch` requires Codex CLI 0.159.2 or newer. Check the CLI found on `PATH` with `codex-switch doctor`; add `--desktop-codex <path>` to check a desktop app's bundled engine separately. This is codex-switch's support minimum, not a claim that older Codex versions cannot work on their own. Versions newer than the current 0.161.0 alignment baseline are accepted but not fully verified.
+Login, account management, quota/subscription/Daybreak queries and the TUI work without installing either the CLI or the desktop app. Only `launch` needs a Codex engine. On macOS, it also discovers the engine bundled with ChatGPT or Codex in the user's or system Applications folder when no PATH CLI is available. Set `CODEX_SWITCH_CODEX` to an executable path for another installation or to select a specific engine. `launch` starts that engine in the terminal; it does not open the desktop GUI.
+
+Run `codex-switch doctor` to inspect engine selection; `--desktop-codex <path>` also checks a specific bundled engine. The support minimum remains 0.159.2; versions newer than the 0.162.1 alignment baseline are accepted but not fully verified. ChatGPT account management requires `cli_auth_credentials_store = "file"`; keyring, auto and ephemeral stores are unsupported. After switching, reconnect or restart existing desktop sessions and confirm the account shown there. A successful file update or managed daemon restart does not prove that an already-open desktop session changed accounts.
 
 ![TUI](docs/tui.png)
 
@@ -57,6 +59,7 @@ codex-switch launch       # start Codex with the best account
   codex-switch launch openrouter --model deepseek/deepseek-r1-0528
   ```
 - Displays the main and model-specific quota pools in CLI and TUI views.
+- Fetches account-specific Daybreak Blue/Red eligibility and subscription expiry during quota refresh. The TUI adds a Daybreak column when any account advertises access, with independent blue/red sun symbols. Details distinguish unknown eligibility from confirmed absence and label JWT subscription fallbacks with their source and last-check time.
 - Selects an eligible account with adaptive, pace-aware scoring, and launches Codex with it.
 - After a switch (`use`, TUI `u`, or a `login` that activates credentials), restarts a running Codex app-server daemon (Codex 0.157+) with `codex app-server daemon restart` so new sessions use the selected account; disable with `[use] restart_app_server = false`. ChatGPT `launch` passes `--no-daemon` instead when Codex supports it.
 - Supports reset cards, one-time quota warmup (`warmup`), forced usage refresh (`list -f`), JSON output, and proxies. On the TUI Accounts page, `u` (when no accounts are marked) switches the selected account and shows progress, `t` enables session-only auto-refresh, and the account menu's `w` performs a one-time warmup; it does not run a resident service.
