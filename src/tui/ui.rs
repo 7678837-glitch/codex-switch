@@ -1221,6 +1221,13 @@ fn daybreak_table_cell(status: &UsageStatus) -> Cell<'static> {
 }
 
 pub(super) fn daybreak_detail_lines(u: &UsageInfo) -> Vec<Line<'static>> {
+    if u.daybreak_error.is_none()
+        && u.daybreak
+            .as_ref()
+            .is_some_and(|access| !access.blue && !access.red)
+    {
+        return Vec::new();
+    }
     let (blue, red) = match &u.daybreak {
         Some(access) if u.daybreak_error.is_none() => (
             if access.blue {
@@ -2128,10 +2135,10 @@ fn status_content_height(app: &App, width: u16) -> usize {
 mod tests {
     use super::{
         C_BLUE, C_CYAN, C_GRAY, C_GREEN, C_MAGENTA, C_RED, C_WHITE, C_YELLOW, DIM,
-        credits_table_color, credits_table_text, plan_color, render_account_table,
-        render_status_bar, render_usage_gauges, reset_cards_color, reset_cards_table_state,
-        status_bar_height, status_message_color, subscription_detail_lines, table_text_widths,
-        usage_gauges_height, version_area,
+        credits_table_color, credits_table_text, daybreak_detail_lines, plan_color,
+        render_account_table, render_status_bar, render_usage_gauges, reset_cards_color,
+        reset_cards_table_state, status_bar_height, status_message_color,
+        subscription_detail_lines, table_text_widths, usage_gauges_height, version_area,
     };
     use crate::jwt::AccountInfo;
     use crate::tui::app::{AccountEntry, App, Tab, UsageStatus};
@@ -2940,6 +2947,51 @@ mod tests {
             !joined.contains("62,500 credits"),
             "unit is shown by the header:\n{joined}"
         );
+    }
+
+    #[test]
+    fn daybreak_details_hide_confirmed_absence() {
+        let usage = UsageInfo {
+            daybreak: Some(DaybreakAccess {
+                blue: false,
+                red: false,
+            }),
+            ..Default::default()
+        };
+        assert!(daybreak_detail_lines(&usage).is_empty());
+    }
+
+    #[test]
+    fn daybreak_details_keep_available_access_and_unknown_status() {
+        for (blue, red) in [(true, false), (false, true), (true, true)] {
+            let usage = UsageInfo {
+                daybreak: Some(DaybreakAccess { blue, red }),
+                ..Default::default()
+            };
+            let lines = daybreak_detail_lines(&usage);
+            assert_eq!(lines.len(), 1);
+            let text = lines[0].to_string();
+            if blue {
+                assert!(text.contains("Blue available"), "{text}");
+            }
+            if red {
+                assert!(text.contains("Red available"), "{text}");
+            }
+        }
+
+        assert!(!daybreak_detail_lines(&UsageInfo::default()).is_empty());
+        let incomplete = UsageInfo {
+            daybreak: Some(DaybreakAccess {
+                blue: false,
+                red: false,
+            }),
+            daybreak_error: Some("partial_catalog".into()),
+            ..Default::default()
+        };
+        let lines = daybreak_detail_lines(&incomplete);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].to_string().contains("Blue unknown"));
+        assert!(lines[1].to_string().contains("catalogue incomplete"));
     }
 
     #[test]

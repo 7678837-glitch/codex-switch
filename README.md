@@ -8,7 +8,7 @@
 
 ## Quick start
 
-Codex must use its file credential store. If needed, add this to `$CODEX_HOME/config.toml` (normally `~/.codex/config.toml`); a managed configuration with `forced_login_method = "api"` is incompatible:
+No Codex CLI or desktop installation is needed for account management and the TUI. When sharing credentials with Codex, use its file credential store. If needed, add this to `$CODEX_HOME/config.toml` (normally `~/.codex/config.toml`); a managed configuration with `forced_login_method = "api"` is incompatible:
 
 ```toml
 cli_auth_credentials_store = "file"
@@ -43,7 +43,7 @@ Login, account management, quota/subscription/Daybreak queries and the TUI work 
 
 Run `codex-switch doctor` to inspect engine selection; `--desktop-codex <path>` also checks a specific bundled engine. The support minimum remains 0.159.2; versions newer than the 0.162.1 alignment baseline are accepted but not fully verified. ChatGPT account management requires `cli_auth_credentials_store = "file"`; keyring, auto and ephemeral stores are unsupported. After switching, reconnect or restart existing desktop sessions and confirm the account shown there. A successful file update or managed daemon restart does not prove that an already-open desktop session changed accounts.
 
-![TUI](docs/tui.png)
+![codex-switch account dashboard showing quota, reset times, credits, Daybreak access and subscription expiry](docs/tui.png)
 
 ## What it does
 
@@ -59,7 +59,7 @@ Run `codex-switch doctor` to inspect engine selection; `--desktop-codex <path>` 
   codex-switch launch openrouter --model deepseek/deepseek-r1-0528
   ```
 - Displays the main and model-specific quota pools in CLI and TUI views.
-- Fetches account-specific Daybreak Blue/Red eligibility and subscription expiry during quota refresh. The TUI adds a Daybreak column when any account advertises access, with independent blue/red sun symbols. Details distinguish unknown eligibility from confirmed absence and label JWT subscription fallbacks with their source and last-check time.
+- Fetches account-specific Daybreak Blue/Red eligibility and subscription expiry during quota refresh. The TUI adds a Daybreak column when any account advertises access, with independent blue/red sun symbols. Details omit the Daybreak row for accounts confirmed to have neither variant; unknown status and query failures remain visible. Subscription details label JWT fallbacks with their source and last-check time; expiry does not promise automatic renewal.
 - Selects an eligible account with adaptive, pace-aware scoring, and launches Codex with it.
 - After a switch (`use`, TUI `u`, or a `login` that activates credentials), restarts a running Codex app-server daemon (Codex 0.157+) with `codex app-server daemon restart` so new sessions use the selected account; disable with `[use] restart_app_server = false`. ChatGPT `launch` passes `--no-daemon` instead when Codex supports it.
 - Supports reset cards, one-time quota warmup (`warmup`), forced usage refresh (`list -f`), JSON output, and proxies. On the TUI Accounts page, `u` (when no accounts are marked) switches the selected account and shows progress, `t` enables session-only auto-refresh, and the account menu's `w` performs a one-time warmup; it does not run a resident service.

@@ -8,7 +8,7 @@
 
 ## 快速开始
 
-Codex 必须使用文件型凭据存储。如有需要，在 `$CODEX_HOME/config.toml`（通常为 `~/.codex/config.toml`）中加入下面一行；受管配置若设置了 `forced_login_method = "api"` 则不兼容：
+账号管理和 TUI 无需安装 Codex CLI 或桌面应用。与 Codex 共用凭据时，Codex 需使用文件型凭据存储。如有需要，在 `$CODEX_HOME/config.toml`（通常为 `~/.codex/config.toml`）中加入下面一行；受管配置若设置了 `forced_login_method = "api"` 则不兼容：
 
 ```toml
 cli_auth_credentials_store = "file"
@@ -43,7 +43,7 @@ codex-switch launch       # 用最佳账号启动 Codex
 
 用 `codex-switch doctor` 检查引擎选择；`--desktop-codex <路径>` 可额外检查指定的桌面引擎。最低支持版本仍为 `0.159.2`，当前对齐基线为 `0.162.1`。ChatGPT 账号管理需要 `cli_auth_credentials_store = "file"`，不支持 keyring、auto 和 ephemeral 存储。切换后需重新连接或重启已有桌面会话，并确认其中的账号；文件写入或 managed daemon 重启成功不代表已打开的桌面会话即时切号。
 
-![TUI](docs/tui.png)
+![codex-switch 账号面板：额度、重置时间、Credits、Daybreak 资格和订阅有效期](docs/tui.png)
 
 ## 功能一览
 
@@ -59,7 +59,7 @@ codex-switch launch       # 用最佳账号启动 Codex
   codex-switch launch openrouter --model deepseek/deepseek-r1-0528
   ```
 - CLI 与 TUI 展示主额度池和每个模型的独立额度池。
-- 账号刷新同时查询 Daybreak Blue／Red 资格和订阅有效期。TUI 在任一账号具备资格时显示 Daybreak 列，以蓝色／红色太阳图标分别标识；详情区分未知状态和确认无资格。订阅实时结果优先，JWT 兜底标明快照来源及检查时间，不代表一定自动续费。
+- 账号刷新同时查询 Daybreak Blue／Red 资格和订阅有效期。TUI 在任一账号具备资格时显示 Daybreak 列，以蓝色／红色太阳图标分别标识；已确认两者均无资格的账号在详情中隐藏整行，未知状态和查询失败仍会提示。订阅实时结果优先，JWT 兜底标明快照来源及检查时间，不代表一定自动续费。
 - 自适应配速感知评分自动选号，并可直接用它启动 Codex。
 - 切换账号后（`use`、TUI 的 `u`，或会激活凭据的 `login`），若 Codex app-server daemon（Codex 0.157+）正在运行，会执行 `codex app-server daemon restart`，让新会话使用所选账号；可用 `[use] restart_app_server = false` 关闭。ChatGPT 的 `launch` 在 Codex 支持时改为附加 `--no-daemon`。
 - 支持重置卡、一次性配额预热（`warmup`）、强制刷新额度（`list -f`）、JSON 输出和代理。TUI 的 Accounts 页在未勾选账号时用 `u` 切换选中账号并显示进度，`t` 开启当前会话自动刷新，账号菜单中的 `w` 执行一次性预热；不运行常驻服务。
