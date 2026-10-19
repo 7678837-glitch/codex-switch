@@ -6,6 +6,8 @@
 
 ![codex-switch account dashboard showing quota, reset times, credits, Daybreak access and subscription expiry](docs/tui.png)
 
+> `codex-switch` is an unofficial tool. It is not affiliated with or endorsed by OpenAI.
+
 > `codex-switch` manages local authentication files. Never publish profiles, `auth.json`, tokens, proxy credentials, or unredacted debug output.
 
 ## Quick start
