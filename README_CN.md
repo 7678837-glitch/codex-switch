@@ -1,8 +1,12 @@
 # codex-switch
 
+[English](README.md) | 简体中文
+
+> 本文是英文 README 的中文译本，内容以英文版为准。
+
 **[OpenAI Codex](https://github.com/openai/codex) 多账号管理工具，支持文件凭据的桌面环境** — 保存本机 Codex 登录、监控配额，并在下一次会话前选出最佳账号。
 
-[English README](README.md) · [**完整文档（Wiki）**](https://github.com/xjoker/codex-switch/wiki) · [中文指南](https://github.com/xjoker/codex-switch/wiki/Chinese-Guide) · [Releases](https://github.com/xjoker/codex-switch/releases)
+[**完整文档（Wiki）**](https://github.com/xjoker/codex-switch/wiki) · [中文指南](https://github.com/xjoker/codex-switch/wiki/Chinese-Guide) · [Releases](https://github.com/xjoker/codex-switch/releases)
 
 ![codex-switch 账号面板：额度、重置时间、Credits、Daybreak 资格和订阅有效期](docs/tui.png)
 
